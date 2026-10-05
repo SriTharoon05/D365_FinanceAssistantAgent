@@ -1,0 +1,49 @@
+# Secrets and developer configuration
+.env
+.env.*
+!.env.example
+.session_secret
+*.pem
+*.key
+*.pfx
+*.p12
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+.coverage
+.coverage.*
+htmlcov/
+
+# JavaScript / frontend outputs
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+playwright-report/
+test-results/
+
+# Runtime SQLite and uploads
+backend/data/
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+backend/uploads/
+*.log
+
+# Local tooling
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+.codex/
