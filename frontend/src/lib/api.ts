@@ -84,7 +84,7 @@ export const endpoints = {
   deleteConversation: (id: string) =>
     api<void>(`/conversations/${encodeURIComponent(id)}`, { method: 'DELETE' }),
   clearArchived: () => api<void>('/conversations?archived=true', { method: 'DELETE' }),
-  action: (id: string, choice: 'confirm' | 'cancel', conversation_id: string) =>
+  action: (id: string, choice: 'confirm' | 'cancel' | 'verify', conversation_id: string) =>
     api<Pick<PendingAction, 'id' | 'status' | 'result'>>(
       `/actions/${encodeURIComponent(id)}/${choice}`,
       {

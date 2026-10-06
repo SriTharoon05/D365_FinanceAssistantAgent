@@ -1,8 +1,10 @@
 """Standard-public-entity adapter. Unknown fields and business state fail closed."""
 
+import asyncio
 from contextvars import ContextVar
 from datetime import date
 from decimal import Decimal, InvalidOperation, localcontext
+from functools import partial
 
 from app.core.errors import AppError
 
@@ -10,6 +12,7 @@ from .client import entity_key, escape_account_display_value, odata_literal
 from .errors import D365EntityUnavailableError, UnsafeMutationError
 from .finance import utcnow
 from .metadata import norm
+from .setup import list_setup, lookup_main_account, lookup_setup, setup_field
 
 
 WRITE_ATTEMPTED = ContextVar("d365_write_attempted", default=False)
@@ -101,6 +104,19 @@ class LiveD365Provider:
             )
         return result
 
+    def wire_value(self, info, field, value):
+        field_type = info.fields.get(field)
+        if field_type == "Edm.Decimal":
+            return decimal_string(value)
+        if field_type == "Edm.Int64":
+            amount = Decimal(decimal_string(value))
+            if amount != amount.to_integral_value() or not -(2**63) <= amount < 2**63:
+                raise AppError("D365_VALIDATION_ERROR", "The Int64 field value is invalid.", status_code=422)
+            return str(int(amount))
+        if field_type == "Edm.DateTimeOffset" and len(str(value)) == 10:
+            return date_string(value) + "T00:00:00Z"
+        return value
+
     def value(self, info, row, role, required=True):
         field = info.resolve(role)
         value = row.get(field) if field else None
@@ -119,7 +135,15 @@ class LiveD365Provider:
         where = self.company_filter(info, company)
         if clause:
             where += " and (" + clause + ")"
-        return await self.client.get(info.name, filter=where, top=top, cross_company=True)
+        records = await self.client.get(info.name, filter=where, top=top, cross_company=True)
+        for row in records:
+            if str(self.value(info, row, "company")).casefold() != company.casefold():
+                raise AppError(
+                    "D365_FINANCE_DATA_INVALID",
+                    "Dynamics 365 returned a record outside the requested legal entity. No mutation is allowed.",
+                    status_code=502,
+                )
+        return records
 
     def normalize_customer(self, info, row):
         group = next((row[key] for key in row if norm(key) in {"customergroupid", "customergroup"}), None)
@@ -172,6 +196,12 @@ class LiveD365Provider:
                 "D365_AMBIGUOUS_RECORD",
                 "Dynamics 365 returned multiple customer records for this account. No mutation is permitted.",
                 status_code=409,
+            )
+        if str(self.value(info, rows[0], "account")) != account:
+            raise AppError(
+                "D365_FINANCE_DATA_INVALID",
+                "Dynamics 365 returned a different customer account. No mutation is allowed.",
+                status_code=502,
             )
         return info, rows[0]
 
@@ -346,6 +376,9 @@ class LiveD365Provider:
                             status_code=409,
                         )
         info, row = await self.header_record(identifier, company)
+        return self.normalize_invoice_header(info, row, identifier, company)
+
+    def normalize_invoice_header(self, info, row, identifier, company):
         return {
             "account": str(self.value(info, row, "account")),
             "company": company,
@@ -431,14 +464,7 @@ class LiveD365Provider:
         return sorted(candidates, key=lambda info: (len(info.name), info.name))[0]
 
     async def validate_terms(self, terms, company):
-        info = self.find_setup(
-            "payment terms",
-            ("PaymentTerms", "TermsOfPayment"),
-            (("PaymentTermsName", "PaymentTerms", "TermsOfPayment"),),
-        )
-        await self.verify_master(
-            info.name, terms, ("PaymentTermsName", "PaymentTerms", "TermsOfPayment"), company
-        )
+        await lookup_setup(self.client, self.registry, "payment_terms", terms, company)
 
     async def journal_record(self, number, company):
         info = self.info(self.settings.d365_payment_headers_entity)
@@ -453,52 +479,206 @@ class LiveD365Provider:
         return info, records[0]
 
     async def payment_setup(self, data, company, include_line=False):
+        self.info(self.settings.d365_payment_headers_entity)
         journal_name = data.get("journal_name", self.settings.d365_payment_journal_name)
-        names = self.find_setup(
-            "customer payment journal", ("JournalNames",), (("JournalName",), ("JournalType",))
-        )
-
-        def check_journal(info, record):
-            value = enum_member(record.get(info.actual("JournalType"), ""))
-            if value != "CustPayment":
-                raise UnsafeMutationError(
-                    "The selected journal name is not a verified CustPayment journal type."
-                )
-
-        await self.verify_master(names.name, journal_name, ("JournalName",), company, check_journal)
+        names, record = await lookup_setup(self.client, self.registry, "journal_name", journal_name, company)
+        if (
+            enum_member(record.get(setup_field(names, "journal_name", "type"), "")).casefold()
+            != "custpayment"
+        ):
+            raise UnsafeMutationError("The selected journal name is not a verified CustPayment journal type.")
         if not include_line:
             return
-        bank = self.find_setup(
-            "bank account", ("BankAccounts",), (("BankAccountId", "BankAccount", "AccountID"),)
-        )
-        await self.verify_master(
-            bank.name,
+        bank, record = await lookup_setup(
+            self.client,
+            self.registry,
+            "bank_account",
             data.get("bank_account", self.settings.d365_payment_bank_account),
-            ("BankAccountId", "BankAccount", "AccountID"),
             company,
         )
-        modes = self.find_setup(
-            "customer payment method",
-            ("CustomerPaymentModes", "CustomerPaymentMethods"),
-            (("Name", "PaymentMode", "PaymentMethodName", "PaymentModeName"),),
-        )
-        await self.verify_master(
-            modes.name,
+        self.verify_bank_account(bank, record)
+        await lookup_setup(
+            self.client,
+            self.registry,
+            "payment_method",
             data.get("payment_method", self.settings.d365_payment_method),
-            ("PaymentMode", "PaymentMethodName", "PaymentModeName", "Name"),
             company,
         )
-        profiles = self.find_setup(
-            "customer posting profile",
-            ("CustomerPostingProfiles",),
-            (("PostingProfile", "PostingProfileName", "Name"),),
-        )
-        await self.verify_master(
-            profiles.name,
+        await lookup_setup(
+            self.client,
+            self.registry,
+            "posting_profile",
             data.get("posting_profile", self.settings.d365_customer_posting_profile),
-            ("PostingProfile", "PostingProfileName", "Name"),
             company,
         )
+
+    def verify_revenue_account(self, info, row):
+        if enum_member(row.get(setup_field(info, "main_account", "type"), "")).casefold() != "revenue":
+            raise UnsafeMutationError("The main account must be a verified revenue account.")
+        for field in ("suspended", "manual_blocked"):
+            if posted_value(row.get(setup_field(info, "main_account", field))):
+                raise UnsafeMutationError(
+                    "The revenue account is suspended or does not permit manual posting."
+                )
+
+    def verify_bank_account(self, info, row):
+        status = info.actual("BankAccountStatus")
+        if status and enum_member(row.get(status, "")).casefold() != "activeforalltransactions":
+            raise UnsafeMutationError("The bank account is not verified as active for new transactions.")
+
+    async def get_write_setup(self, company, purpose="all"):
+        self.info(self.settings.d365_customers_entity)
+        if purpose not in {"all", "invoice", "payment", "customer"}:
+            raise AppError(
+                "D365_VALIDATION_ERROR", "Choose a supported write setup purpose.", status_code=422
+            )
+        roles = []
+        if purpose in {"all", "invoice"}:
+            roles.append(
+                ("main_account", self.settings.d365_revenue_account, self.settings.d365_main_accounts_entity)
+            )
+        if purpose in {"all", "payment"}:
+            roles.extend(
+                (
+                    ("journal_name", self.settings.d365_payment_journal_name, None),
+                    ("bank_account", self.settings.d365_payment_bank_account, None),
+                    ("payment_method", self.settings.d365_payment_method, None),
+                    ("posting_profile", self.settings.d365_customer_posting_profile, None),
+                )
+            )
+        if purpose in {"all", "customer"}:
+            roles.append(("payment_terms", None, None))
+        result = {
+            "company": company.lower(),
+            "purpose": purpose,
+            "mock_mode": False,
+            "setup": {},
+            "evidence": [],
+        }
+        for role, default, configured in roles:
+            section = {"candidates": [], "configured_default": {"value": default, "verified": False}}
+            try:
+                info, rows = await list_setup(
+                    self.client,
+                    self.registry,
+                    role,
+                    company,
+                    configured,
+                    type_member={"main_account": "Revenue", "journal_name": "CustPayment"}.get(role),
+                )
+                section["source_entity"] = info.name
+                for row in rows:
+                    identifier = row.get(setup_field(info, role, "id"))
+                    if not isinstance(identifier, str) or not identifier.strip():
+                        continue
+                    if role in {"main_account", "bank_account"}:
+                        try:
+                            if role == "main_account":
+                                self.verify_revenue_account(info, row)
+                            else:
+                                self.verify_bank_account(info, row)
+                        except AppError:
+                            continue
+                    candidate = {"id": identifier}
+                    if role in {"main_account", "journal_name"}:
+                        kind = enum_member(row.get(setup_field(info, role, "type"), ""))
+                        if role == "journal_name" and kind.casefold() != "custpayment":
+                            continue
+                        candidate["type"] = kind
+                    section["candidates"].append(candidate)
+                result["evidence"].append(
+                    {
+                        "kind": "write_setup",
+                        "company": company.lower(),
+                        "source_entity": info.name,
+                        "retrieved_at": utcnow().isoformat(),
+                    }
+                )
+                section["listing_limit"] = 50
+                if default:
+                    try:
+                        verified_info, record = await lookup_setup(
+                            self.client, self.registry, role, default, company, configured
+                        )
+                        if role == "main_account":
+                            self.verify_revenue_account(verified_info, record)
+                        if role == "bank_account":
+                            self.verify_bank_account(verified_info, record)
+                        if (
+                            role == "journal_name"
+                            and enum_member(
+                                record.get(setup_field(verified_info, role, "type"), "")
+                            ).casefold()
+                            != "custpayment"
+                        ):
+                            raise UnsafeMutationError(
+                                "The configured journal name is not a CustPayment journal."
+                            )
+                        section["configured_default"]["verified"] = True
+                    except AppError as exc:
+                        if exc.code in {
+                            "D365_CONNECTION_ERROR",
+                            "D365_AUTHENTICATION_ERROR",
+                            "D365_RATE_LIMIT_ERROR",
+                        }:
+                            raise
+                        section["configured_default"]["diagnostic"] = exc.message
+            except AppError as exc:
+                if exc.code in {
+                    "D365_CONNECTION_ERROR",
+                    "D365_AUTHENTICATION_ERROR",
+                    "D365_RATE_LIMIT_ERROR",
+                }:
+                    raise
+                section["diagnostic"] = exc.message
+            result["setup"][role] = section
+        if purpose in {"all", "customer"}:
+            for role, entity, names in (
+                (
+                    "customer_group",
+                    self.settings.d365_customer_groups_entity,
+                    ("CustomerGroupId", "CustomerGroup"),
+                ),
+                ("currency", self.settings.d365_currencies_entity, ("CurrencyCode", "Currency")),
+            ):
+                section = {"candidates": []}
+                try:
+                    info = self.info(entity)
+                    identifier = self.actual(info, *names)
+                    rows = (
+                        await self.rows(info, company, top=50)
+                        if info.resolve("company")
+                        else await self.client.get(entity, top=50)
+                    )
+                    section.update(
+                        {
+                            "source_entity": entity,
+                            "listing_limit": 50,
+                            "candidates": [
+                                {"id": row[identifier]}
+                                for row in rows
+                                if isinstance(row.get(identifier), str) and row[identifier].strip()
+                            ],
+                        }
+                    )
+                    result["evidence"].append(
+                        {
+                            "kind": "write_setup",
+                            "company": company.lower(),
+                            "source_entity": entity,
+                            "retrieved_at": utcnow().isoformat(),
+                        }
+                    )
+                except AppError as exc:
+                    if exc.code in {
+                        "D365_CONNECTION_ERROR",
+                        "D365_AUTHENTICATION_ERROR",
+                        "D365_RATE_LIMIT_ERROR",
+                    }:
+                        raise
+                    section["diagnostic"] = exc.message
+                result["setup"][role] = section
+        return result
 
     async def validate_mutation(self, action, data, company):
         if action == "create_customer":
@@ -605,27 +785,14 @@ class LiveD365Provider:
                     status_code=409,
                 )
             for line in data["lines"]:
-
-                def check_main(info, row):
-                    type_field = self.actual(info, "Type", "MainAccountType")
-                    if enum_member(row.get(type_field, "")) != "Revenue":
-                        raise UnsafeMutationError("The main account must be a verified revenue account.")
-                    for names in (
-                        ("IsSuspended", "Suspended"),
-                        ("DoNotAllowManualEntry", "DoNotAllowManualPosting"),
-                    ):
-                        flag = self.actual(info, *names)
-                        if posted_value(row.get(flag)):
-                            raise UnsafeMutationError(
-                                "The revenue account is suspended or does not permit manual posting."
-                            )
-
-                await self.verify_master(
-                    self.settings.d365_main_accounts_entity,
+                info, row = await lookup_main_account(
+                    self.client,
+                    self.registry,
                     line.get("revenue_account", self.settings.d365_revenue_account),
-                    ("MainAccountId", "MainAccount"),
-                    predicate=check_main,
+                    company,
+                    self.settings.d365_main_accounts_entity,
                 )
+                self.verify_revenue_account(info, row)
             self.invoice_payloads(data, company)
             return None
         if action in {"update_draft_free_text_invoice", "delete_draft_free_text_invoice"}:
@@ -700,26 +867,39 @@ class LiveD365Provider:
             self.field(header, "company"): company,
             self.field(header, "account"): data["account"],
             self.field(header, "currency"): data["currency"],
-            self.actual(header, "DueDate"): data["due_date"],
-            self.actual(header, "InvoiceDate"): data["invoice_date"],
+            self.actual(header, "DueDate"): self.wire_value(
+                header, self.actual(header, "DueDate"), data["due_date"]
+            ),
+            self.actual(header, "InvoiceDate"): self.wire_value(
+                header, self.actual(header, "InvoiceDate"), data["invoice_date"]
+            ),
             identifier: data["external_id"],
         }
+        invoice_account = header.actual("InvoiceAccount")
+        if invoice_account:
+            payload[invoice_account] = data["account"]
         line_payloads = []
         for index, line in enumerate(data["lines"], 1):
-            line_payloads.append(
-                {
-                    self.field(lines, "company"): company,
-                    self.actual(
-                        lines, "InvoiceIdentifier", "ParentInvoiceIdentifier", "ExternalInvoiceId"
-                    ): data["external_id"],
-                    self.actual(lines, "LineNumber"): index,
-                    self.actual(lines, "Description"): line["description"],
-                    self.actual(lines, "MainAccountDisplayValue"): line.get(
-                        "revenue_account", self.settings.d365_revenue_account
-                    ),
-                    self.actual(lines, "Amount", "LineAmount", "InvoiceAmount"): line["amount"],
-                }
-            )
+            line_payload = {
+                self.field(lines, "company"): company,
+                self.actual(lines, "InvoiceIdentifier", "ParentInvoiceIdentifier", "ExternalInvoiceId"): data[
+                    "external_id"
+                ],
+                self.actual(lines, "LineNumber"): self.wire_value(
+                    lines, self.actual(lines, "LineNumber"), index
+                ),
+                self.actual(lines, "Description"): line["description"],
+                self.actual(lines, "MainAccountDisplayValue"): escape_account_display_value(
+                    line.get("revenue_account", self.settings.d365_revenue_account)
+                ),
+                self.actual(
+                    lines, "TransactionCurrencyAmount", "Amount", "LineAmount", "InvoiceAmount"
+                ): line["amount"],
+            }
+            if lines.actual("Quantity") and lines.actual("UnitPrice"):
+                line_payload[lines.actual("Quantity")] = "1"
+                line_payload[lines.actual("UnitPrice")] = line["amount"]
+            line_payloads.append(line_payload)
         return payload, line_payloads
 
     def payment_payload(self, data, company):
@@ -747,13 +927,36 @@ class LiveD365Provider:
         }
         return {
             self.field(info, "company"): company,
-            **{self.actual(info, *names): value for names, value in mapping.items()},
+            **{
+                self.actual(info, *names): self.wire_value(info, self.actual(info, *names), value)
+                for names, value in mapping.items()
+            },
         }
 
-    def verify_fields(self, row, requested):
+    def verify_fields(self, row, requested, info=None):
         for key, value in requested.items():
             actual = row.get(key)
-            if actual is None or str(actual) != str(value):
+            matches = str(actual) == str(value)
+            if norm(key) in {"dataareaid", "legalentityid", "company"}:
+                matches = str(actual).casefold() == str(value).casefold()
+            if info and info.fields.get(key) in {"Edm.Decimal", "Edm.Int64"} and actual is not None:
+                matches = Decimal(decimal_string(actual)) == Decimal(decimal_string(value))
+            if info and info.fields.get(key) == "Edm.DateTimeOffset" and actual is not None:
+                matches = date_string(actual) == date_string(value)
+            if (
+                info
+                and info.fields.get(key)
+                and not info.fields[key].startswith("Edm.")
+                and actual is not None
+            ):
+                matches = enum_member(actual).casefold() == enum_member(value).casefold()
+            if norm(key) in {
+                "accountdisplayvalue",
+                "offsetaccountdisplayvalue",
+                "mainaccountdisplayvalue",
+            } and isinstance(actual, str):
+                matches = matches or escape_account_display_value(actual) == str(value)
+            if actual is None or not matches:
                 raise AppError(
                     "D365_WRITE_VERIFICATION_FAILED",
                     "Dynamics 365 did not return the requested field values after the write. Verify the record before trying again.",
@@ -765,7 +968,7 @@ class LiveD365Provider:
         info = self.info(self.settings.d365_free_text_lines_entity)
         link = self.actual(info, "InvoiceIdentifier", "ParentInvoiceIdentifier", "ExternalInvoiceId")
         rows = await self.rows(info, company, f"{link} eq {odata_literal(data['external_id'])}")
-        amount = self.actual(info, "Amount", "LineAmount", "InvoiceAmount")
+        amount = self.actual(info, "TransactionCurrencyAmount", "Amount", "LineAmount", "InvoiceAmount")
         if len(rows) != len(data["lines"]):
             raise AppError(
                 "D365_WRITE_VERIFICATION_FAILED",
@@ -780,10 +983,31 @@ class LiveD365Provider:
                 "The created invoice line total differs from the requested draft. Review it before trying again.",
                 status_code=409,
             )
+        _, expected_lines = self.invoice_payloads(data, company)
+        number = self.actual(info, "LineNumber")
+        by_number = {}
+        for row in rows:
+            key = Decimal(decimal_string(row.get(number)))
+            if key in by_number:
+                raise AppError(
+                    "D365_WRITE_VERIFICATION_FAILED",
+                    "The created draft has duplicate invoice line numbers. Review it in Dynamics 365.",
+                    status_code=409,
+                )
+            by_number[key] = row
+        for expected in expected_lines:
+            key = Decimal(decimal_string(expected[number]))
+            if key not in by_number:
+                raise AppError(
+                    "D365_WRITE_VERIFICATION_FAILED",
+                    "The created draft line numbers differ from the requested draft. Review it in Dynamics 365.",
+                    status_code=409,
+                )
+            self.verify_fields(by_number[key], expected, info)
 
-    async def write(self, method, *args):
+    async def write(self, method, *args, **kwargs):
         try:
-            result = await getattr(self.client, method)(*args)
+            result = await getattr(self.client, method)(*args, **kwargs)
         except AppError as exc:
             if exc.code == "D365_WRITE_OUTCOME_UNKNOWN":
                 WRITE_ATTEMPTED.set(True)
@@ -795,11 +1019,14 @@ class LiveD365Provider:
         return result
 
     async def execute_mutation(self, action, data, company):
-        await self.validate_mutation(action, data, company)
         token = WRITE_ATTEMPTED.set(False)
         try:
+            await self.validate_mutation(action, data, company)
             return await self._execute_validated(action, data, company)
         except AppError as exc:
+            if not WRITE_ATTEMPTED.get():
+                exc.details = {**(exc.details or {}), "write_outcome": "not_written"}
+                raise
             if WRITE_ATTEMPTED.get() and exc.code not in {
                 "D365_WRITE_OUTCOME_UNKNOWN",
                 "D365_WRITE_VERIFICATION_FAILED",
@@ -829,42 +1056,162 @@ class LiveD365Provider:
         finally:
             WRITE_ATTEMPTED.reset(token)
 
+    async def verify_after_write(self, verify):
+        """Retry only read observations of an acknowledged write, never the write itself."""
+        pending = {
+            "D365_WRITE_VERIFICATION_FAILED",
+            "D365_CUSTOMER_NOT_FOUND",
+            "D365_INVOICE_NOT_FOUND",
+            "D365_JOURNAL_NOT_FOUND",
+        }
+        for attempt in range(3):
+            try:
+                return await verify()
+            except AppError as exc:
+                if exc.code not in pending or attempt == 2:
+                    raise
+                await asyncio.sleep((0.2, 0.5)[attempt])
+
+    async def verify_customer(self, account, company, changes):
+        info, record = await self.customer_record(account, company)
+        self.verify_fields(record, changes)
+        return {
+            "identifier": account,
+            "customer": self.normalize_customer(info, record),
+            "verified": True,
+        }
+
+    async def verify_deleted_customer(self, account, company):
+        try:
+            await self.customer_record(account, company)
+        except AppError as exc:
+            if exc.code == "D365_CUSTOMER_NOT_FOUND":
+                return {"identifier": account, "deleted": True, "verified": True}
+            raise
+        raise AppError(
+            "D365_WRITE_VERIFICATION_FAILED",
+            "The customer still exists after deletion. Verify its state in Dynamics 365.",
+            status_code=409,
+        )
+
+    async def verify_updated_invoice(self, identifier, company, due_date):
+        info, record = await self.header_record(identifier, company)
+        if posted_value(record.get(self.actual(info, "IsPosted"))):
+            raise AppError(
+                "D365_WRITE_VERIFICATION_FAILED",
+                "The invoice is now posted. Review the record in Dynamics 365 before making another change.",
+                status_code=409,
+            )
+        if date_string(record.get(self.actual(info, "DueDate"))) != due_date:
+            raise AppError(
+                "D365_WRITE_VERIFICATION_FAILED",
+                "The invoice due date did not match the requested update. Review the draft in Dynamics 365.",
+                status_code=409,
+            )
+        return {
+            "identifier": identifier,
+            "invoice": self.normalize_invoice_header(info, record, identifier, company),
+            "verified": True,
+        }
+
+    async def verify_deleted_invoice(self, identifier, company):
+        try:
+            await self.header_record(identifier, company)
+        except AppError as exc:
+            if exc.code == "D365_INVOICE_NOT_FOUND":
+                return {"identifier": identifier, "deleted": True, "verified": True}
+            raise
+        raise AppError(
+            "D365_WRITE_VERIFICATION_FAILED",
+            "The draft still exists after deletion. Verify the invoice state in Dynamics 365.",
+            status_code=409,
+        )
+
+    async def verify_created_invoice(self, data, company):
+        info, record = await self.header_record(data["external_id"], company)
+        if posted_value(record.get(self.actual(info, "IsPosted"))):
+            raise AppError(
+                "D365_WRITE_VERIFICATION_FAILED",
+                "The new invoice is unexpectedly posted. Review it in Dynamics 365.",
+                status_code=409,
+            )
+        header, _ = self.invoice_payloads(data, company)
+        self.verify_fields(record, header, info)
+        await self.verify_invoice_lines(data, company)
+        return {
+            "identifier": data["external_id"],
+            "invoice": self.normalize_invoice_header(info, record, data["external_id"], company),
+            "verified": True,
+            "posted": False,
+        }
+
+    async def verify_created_journal(self, number, company, payload):
+        info, record = await self.journal_record(number, company)
+        self.verify_fields(record, payload, info)
+        return {
+            "identifier": number,
+            "journal": record,
+            "verified": True,
+            "posted": False,
+            "manual_instructions": "Add and review payment lines, settle against invoices, then post in Dynamics 365. Automatic posting is unavailable.",
+        }
+
+    async def verify_created_payment_line(self, data, company):
+        info = self.info(self.settings.d365_payment_lines_entity)
+        clause = f"{self.actual(info, 'JournalBatchNumber', 'JournalNumber')} eq {odata_literal(data['journal_number'])} and {self.actual(info, 'LineNumber')} eq {data['line_number']}"
+        rows = await self.rows(info, company, clause, top=2)
+        if len(rows) != 1:
+            raise AppError(
+                "D365_WRITE_VERIFICATION_FAILED",
+                "The new payment line could not be uniquely verified. Review the journal before retrying.",
+                status_code=409,
+            )
+        self.verify_fields(rows[0], self.payment_payload(data, company), info)
+        await self.journal_record(data["journal_number"], company)
+        return {
+            "identifier": f"{data['journal_number']}/{data['line_number']}",
+            "payment_line": rows[0],
+            "verified": True,
+            "posted": False,
+            "manual_instructions": "Review and settle the payment against invoices, then post this unposted journal in Dynamics 365.",
+        }
+
+    async def reconcile_mutation(self, action, data, company):
+        """Observe the intended result of an earlier uncertain action without another write."""
+        if action == "update_customer":
+            changes = self.customer_payload(data, company, update=True)
+            verify = partial(self.verify_customer, data["account"], company, changes)
+        elif action == "delete_test_customer":
+            verify = partial(self.verify_deleted_customer, data["account"], company)
+        elif action == "update_draft_free_text_invoice":
+            verify = partial(self.verify_updated_invoice, data["identifier"], company, data["due_date"])
+        elif action == "delete_draft_free_text_invoice":
+            verify = partial(self.verify_deleted_invoice, data["identifier"], company)
+        else:
+            raise UnsafeMutationError("This uncertain action requires manual verification in Dynamics 365.")
+        result = await self.verify_after_write(verify)
+        return {**result, "reconciled": True}
+
     async def _execute_validated(self, action, data, company):
         if action == "create_customer":
             payload = self.customer_payload(data, company)
             await self.write("post", self.settings.d365_customers_entity, payload)
-            info, record = await self.customer_record(data["account"], company)
-            self.verify_fields(
-                record, {key: value for key, value in payload.items() if key != info.actual("PartyType")}
+            info = self.info(self.settings.d365_customers_entity)
+            changes = {key: value for key, value in payload.items() if key != info.actual("PartyType")}
+            return await self.verify_after_write(
+                lambda: self.verify_customer(data["account"], company, changes)
             )
-            return {
-                "identifier": data["account"],
-                "customer": self.normalize_customer(info, record),
-                "verified": True,
-            }
         if action in {"update_customer", "delete_test_customer"}:
             info, record = await self.customer_record(data["account"], company)
             if action == "update_customer":
                 changes = self.customer_payload(data, company, update=True)
-                await self.write("patch", self.key(info, record), changes)
-                updated_info, updated = await self.customer_record(data["account"], company)
-                self.verify_fields(updated, changes)
-                return {
-                    "identifier": data["account"],
-                    "customer": self.normalize_customer(updated_info, updated),
-                    "verified": True,
-                }
-            await self.write("delete", self.key(info, record))
-            try:
-                await self.customer_record(data["account"], company)
-            except AppError as exc:
-                if exc.code == "D365_CUSTOMER_NOT_FOUND":
-                    return {"identifier": data["account"], "deleted": True, "verified": True}
-                raise
-            raise AppError(
-                "D365_WRITE_VERIFICATION_FAILED",
-                "The customer still exists after deletion. Verify its state in Dynamics 365.",
-                status_code=409,
+                await self.write("patch", self.key(info, record), changes, cross_company=True)
+                return await self.verify_after_write(
+                    lambda: self.verify_customer(data["account"], company, changes)
+                )
+            await self.write("delete", self.key(info, record), cross_company=True)
+            return await self.verify_after_write(
+                lambda: self.verify_deleted_customer(data["account"], company)
             )
         if action == "create_draft_free_text_invoice":
             header, lines = self.invoice_payloads(data, company)
@@ -880,20 +1227,7 @@ class LiveD365Provider:
                     status_code=409,
                     details={"identifier": data["external_id"]},
                 ) from None
-            info, record = await self.header_record(data["external_id"], company)
-            if posted_value(record.get(self.actual(info, "IsPosted"))):
-                raise AppError(
-                    "D365_WRITE_VERIFICATION_FAILED",
-                    "The new invoice is unexpectedly posted. Review it in Dynamics 365.",
-                    status_code=409,
-                )
-            await self.verify_invoice_lines(data, company)
-            return {
-                "identifier": data["external_id"],
-                "invoice": await self.invoice(data["external_id"], company),
-                "verified": True,
-                "posted": False,
-            }
+            return await self.verify_after_write(lambda: self.verify_created_invoice(data, company))
         if action in {"update_draft_free_text_invoice", "delete_draft_free_text_invoice"}:
             info, record = await self.header_record(data["identifier"], company)
             if posted_value(record.get(self.actual(info, "IsPosted"))):
@@ -902,30 +1236,18 @@ class LiveD365Provider:
                 )
             if action == "update_draft_free_text_invoice":
                 due_field = self.actual(info, "DueDate")
-                await self.write("patch", self.key(info, record), {due_field: data["due_date"]})
-                _, updated = await self.header_record(data["identifier"], company)
-                if date_string(updated.get(due_field)) != data["due_date"]:
-                    raise AppError(
-                        "D365_WRITE_VERIFICATION_FAILED",
-                        "The invoice due date did not match the requested update. Review the draft in Dynamics 365.",
-                        status_code=409,
-                    )
-                return {
-                    "identifier": data["identifier"],
-                    "invoice": await self.invoice(data["identifier"], company),
-                    "verified": True,
-                }
-            await self.write("delete", self.key(info, record))
-            try:
-                await self.header_record(data["identifier"], company)
-            except AppError as exc:
-                if exc.code == "D365_INVOICE_NOT_FOUND":
-                    return {"identifier": data["identifier"], "deleted": True, "verified": True}
-                raise
-            raise AppError(
-                "D365_WRITE_VERIFICATION_FAILED",
-                "The draft still exists after deletion. Verify the invoice state in Dynamics 365.",
-                status_code=409,
+                await self.write(
+                    "patch",
+                    self.key(info, record),
+                    {due_field: self.wire_value(info, due_field, data["due_date"])},
+                    cross_company=True,
+                )
+                return await self.verify_after_write(
+                    lambda: self.verify_updated_invoice(data["identifier"], company, data["due_date"])
+                )
+            await self.write("delete", self.key(info, record), cross_company=True)
+            return await self.verify_after_write(
+                lambda: self.verify_deleted_invoice(data["identifier"], company)
             )
         if action == "create_customer_payment_journal":
             info = self.info(self.settings.d365_payment_headers_entity)
@@ -944,45 +1266,12 @@ class LiveD365Provider:
                     "The journal creation returned no identifier. Verify the journal in Dynamics 365 before trying again.",
                     status_code=409,
                 )
-            _, record = await self.journal_record(number, company)
-            return {
-                "identifier": number,
-                "journal": record,
-                "verified": True,
-                "posted": False,
-                "manual_instructions": "Add and review payment lines, settle against invoices, then post in Dynamics 365. Automatic posting is unavailable.",
-            }
+            return await self.verify_after_write(
+                lambda: self.verify_created_journal(number, company, payload)
+            )
         if action == "add_customer_payment_line":
             info = self.info(self.settings.d365_payment_lines_entity)
             await self.journal_record(data["journal_number"], company)
             await self.write("post", info.name, self.payment_payload(data, company))
-            clause = f"{self.actual(info, 'JournalBatchNumber', 'JournalNumber')} eq {odata_literal(data['journal_number'])} and {self.actual(info, 'LineNumber')} eq {data['line_number']}"
-            rows = await self.rows(info, company, clause, top=2)
-            if len(rows) != 1:
-                raise AppError(
-                    "D365_WRITE_VERIFICATION_FAILED",
-                    "The new payment line could not be verified. Review the journal before retrying.",
-                    status_code=409,
-                )
-            amount_field = self.actual(info, "CreditAmount")
-            if Decimal(decimal_string(rows[0].get(amount_field))) != Decimal(data["amount"]):
-                raise AppError(
-                    "D365_WRITE_VERIFICATION_FAILED",
-                    "The new payment amount does not match the requested draft. Review the journal before retrying.",
-                    status_code=409,
-                )
-            self.verify_fields(
-                rows[0],
-                {
-                    self.actual(info, "AccountDisplayValue"): escape_account_display_value(data["account"]),
-                    self.actual(info, "CurrencyCode"): data["currency"],
-                },
-            )
-            return {
-                "identifier": f"{data['journal_number']}/{data['line_number']}",
-                "payment_line": rows[0],
-                "verified": True,
-                "posted": False,
-                "manual_instructions": "Review and settle the payment against invoices, then post this unposted journal in Dynamics 365.",
-            }
+            return await self.verify_after_write(lambda: self.verify_created_payment_line(data, company))
         raise UnsafeMutationError("Unsupported financial mutation.")

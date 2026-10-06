@@ -294,7 +294,14 @@ class D365FinanceService:
 
     async def execute_mutation(self, action_type, payload, company=None):
         # Revalidate immediately before execution: a confirmation cannot override changed ERP state.
-        preview = await self.validate_mutation(action_type, payload, company)
+        try:
+            preview = await self.validate_mutation(action_type, payload, company)
+        except AppError as exc:
+            exc.details = {
+                **(exc.details if isinstance(exc.details, dict) else {}),
+                "write_outcome": "not_written",
+            }
+            raise
         result = await self.provider.execute_mutation(
             action_type, preview["proposed_changes"], preview["company"]
         )
@@ -306,3 +313,32 @@ class D365FinanceService:
             "mock_mode": self.provider.mock,
             "evidence": result.get("evidence", []),
         }
+
+    async def reconcile_mutation(self, action_type, payload, company=None):
+        reconcile = getattr(self.provider, "reconcile_mutation", None)
+        if not callable(reconcile):
+            raise AppError(
+                "D365_RECONCILIATION_UNSUPPORTED",
+                "Check the affected record directly in Dynamics 365; automatic verification is unavailable.",
+                status_code=422,
+            )
+        selected_company = self.company(company)
+        result = await reconcile(action_type, self.parse_mutation(action_type, payload), selected_company)
+        return {
+            "action_type": action_type,
+            "company": selected_company,
+            "result": result,
+            "reconciled": True,
+            "verification_basis": "current_record_state",
+            "mock_mode": self.provider.mock,
+        }
+
+    async def get_write_setup(self, purpose="all", company=None):
+        lookup = getattr(self.provider, "get_write_setup", None)
+        if not callable(lookup):
+            raise AppError(
+                "D365_CAPABILITY_UNAVAILABLE",
+                "Setup discovery is unavailable. Check the configured revenue account or journal name in Dynamics 365.",
+                status_code=422,
+            )
+        return await lookup(self.company(company), purpose)

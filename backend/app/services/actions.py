@@ -235,7 +235,10 @@ class ActionsService:
         except Exception as exc:
             # After execution begins, even a read-after-write validation error can
             # follow a successful ERP write. Never infer that retrying is safe.
-            status = "unknown" if execution_started else "failed"
+            details = getattr(exc, "details", None)
+            not_written = isinstance(details, dict) and details.get("write_outcome") == "not_written"
+            outcome_unknown = execution_started and not not_written
+            status = "unknown" if outcome_unknown else "failed"
             error = {
                 "code": getattr(exc, "code", "operation_outcome_unknown"),
                 "message": getattr(
@@ -244,10 +247,11 @@ class ActionsService:
                 "details": safe_json(getattr(exc, "details", None)),
             }
             await self._record_result(action_id, audit_id, status, error)
-            if execution_started:
+            if outcome_unknown:
                 raise AppError(
                     "operation_outcome_unknown",
-                    "The operation outcome requires verification in Dynamics 365. Check the affected record before preparing another action.",
+                    "This operation requires verification in Dynamics 365. Use Verify in D365 to check the current "
+                    "record without repeating the write, or inspect it directly before preparing another action.",
                     status_code=502,
                     retryable=False,
                     details={"cause_code": error["code"], "verification": error["details"]},
@@ -263,6 +267,92 @@ class ActionsService:
         safe_result = safe_json(result)
         await self._record_result(action_id, audit_id, "executed", safe_result)
         return {"id": action_id, "status": "executed", "result": safe_result}
+
+    async def verify(
+        self, action_id: str, conversation_id: str | None, owner_id: str, request_id: str
+    ) -> dict[str, Any]:
+        """Observe an uncertain confirmed operation; never repeat its ERP write."""
+        supported = {
+            "update_customer",
+            "delete_test_customer",
+            "update_draft_free_text_invoice",
+            "delete_draft_free_text_invoice",
+        }
+        async with self.session_factory() as session:
+            action = await self._get_owned_action(session, action_id, conversation_id, owner_id)
+            if action.status == "executed":
+                return {"id": action.id, "status": action.status, "result": action.result}
+            if action.status not in {"unknown", "verification_required"}:
+                raise AppError(
+                    "action_not_uncertain",
+                    "Only an uncertain confirmed action can be verified.",
+                    status_code=409,
+                )
+            if action.action_type not in supported:
+                raise AppError(
+                    "D365_RECONCILIATION_UNSUPPORTED",
+                    "Verify this operation directly in Dynamics 365 before preparing another action.",
+                    status_code=422,
+                )
+            payload = dict(action.proposed_changes)
+            company = payload.pop("company", self.settings.d365_default_company)
+            action_type, original_error = action.action_type, safe_json(action.result)
+            audit = await session.scalar(
+                select(AuditEvent)
+                .where(AuditEvent.action_id == action.id)
+                .order_by(AuditEvent.created_at.desc())
+                .limit(1)
+            )
+            audit_id = audit.id if audit else None
+        result = safe_json(await self.runtime.finance.reconcile_mutation(action_type, payload, company))
+        observed = result.get("result", result)
+        if not isinstance(observed, dict) or observed.get("verified") is not True:
+            raise AppError(
+                "D365_WRITE_VERIFICATION_FAILED",
+                "The requested record state could not be verified. Inspect the affected record in Dynamics 365.",
+                status_code=409,
+            )
+        result["reconciled"] = True
+        result["verification_basis"] = "current_record_state"
+        result["previous_error"] = original_error
+        async with self.session_factory() as session:
+            changed = await session.execute(
+                update(PendingAction)
+                .where(
+                    PendingAction.id == action_id,
+                    PendingAction.status.in_(["unknown", "verification_required"]),
+                )
+                .values(status="executed", result=result)
+            )
+            if changed.rowcount != 1:
+                await session.rollback()
+                existing = await self._get_owned_action(session, action_id, conversation_id, owner_id)
+                if existing.status == "executed":
+                    return {"id": existing.id, "status": existing.status, "result": existing.result}
+                raise AppError(
+                    "action_not_uncertain",
+                    "The action state changed. Refresh its current result.",
+                    status_code=409,
+                )
+            if audit_id:
+                await session.execute(
+                    update(AuditEvent).where(AuditEvent.id == audit_id).values(result_status="verified")
+                )
+            session.add(
+                AuditEvent(
+                    conversation_id=action.conversation_id,
+                    action_id=action_id,
+                    action="verify_operation",
+                    company=company,
+                    entity=action.entity,
+                    record_identifier=action.target_identifier,
+                    safe_request_summary={"action_type": action_type, "read_only": True},
+                    result_status="verified",
+                    request_id=request_id,
+                )
+            )
+            await session.commit()
+        return {"id": action_id, "status": "executed", "result": result}
 
     async def _record_result(
         self, action_id: str, audit_id: str, status: str, result: dict[str, Any]

@@ -100,6 +100,7 @@ class D365ODataClient:
                         else "application/json;IEEE754Compatible=true",
                         "client-request-id": request_id,
                         "return-client-request-id": "true",
+                        **({"Prefer": "return=representation"} if method == "POST" else {}),
                         **(
                             {"Content-Type": "application/json;IEEE754Compatible=true"}
                             if payload is not None
@@ -137,6 +138,7 @@ class D365ODataClient:
             logger.info(
                 "d365_request",
                 entity=urlsplit(url).path.split("/")[-1].split("(")[0],
+                method=method,
                 http_status=response.status_code,
                 duration_ms=self.latency_ms,
                 retry_count=retries,
@@ -167,13 +169,20 @@ class D365ODataClient:
             if response.status_code >= 400:
                 if response.status_code in (401, 403, 429) or response.status_code >= 500:
                     self._failed(f"Dynamics 365 returned HTTP {response.status_code}.")
-                if method != "GET" and response.status_code >= 500:
+                if method != "GET" and (response.status_code == 408 or response.status_code >= 500):
                     raise AppError(
                         "D365_WRITE_OUTCOME_UNKNOWN",
                         "Dynamics 365 returned a server error after a write. Verify the outcome before retrying.",
                         status_code=409,
                     )
-                raise map_http_error(response.status_code)
+                error = map_http_error(response.status_code)
+                if method != "GET":
+                    error.details = {
+                        **(error.details if isinstance(error.details, dict) else {}),
+                        "upstream_status": response.status_code,
+                        "write_outcome": "rejected",
+                    }
+                raise error
             self.last_success_at = datetime.now(timezone.utc).isoformat()
             return response
 
@@ -281,10 +290,12 @@ class D365ODataClient:
         response = await self.request("POST", entity, payload=payload)
         return response.json() if response.content else {}
 
-    async def patch(self, key, payload):
-        response = await self.request("PATCH", key, payload=payload)
+    async def patch(self, key, payload, *, cross_company=False):
+        response = await self.request(
+            "PATCH", key, payload=payload, params={"cross-company": "true"} if cross_company else None
+        )
         return response.json() if response.content else {}
 
-    async def delete(self, key):
-        await self.request("DELETE", key)
+    async def delete(self, key, *, cross_company=False):
+        await self.request("DELETE", key, params={"cross-company": "true"} if cross_company else None)
         return {"deleted": True}

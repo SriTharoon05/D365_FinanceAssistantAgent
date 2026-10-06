@@ -181,6 +181,46 @@ async def test_ambiguous_write_is_never_retried(settings):
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["patch", "delete"])
+async def test_keyed_customer_write_keeps_explicit_company_scope(settings, method):
+    writes = []
+
+    def transport(request):
+        if request.url.host == "login.microsoftonline.com":
+            return token_response()
+        writes.append(request)
+        return httpx.Response(204)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        client = D365ODataClient(settings, D365AuthManager(settings, http), http)
+        key = "CustomersV3(dataAreaId='usmf',CustomerAccount='TEST-001')"
+        if method == "patch":
+            await client.patch(key, {"OrganizationName": "Updated"}, cross_company=True)
+        else:
+            await client.delete(key, cross_company=True)
+    assert len(writes) == 1
+    assert writes[0].url.params["cross-company"] == "true"
+
+
+@pytest.mark.asyncio
+async def test_post_requests_generated_identifier_representation(settings):
+    writes = []
+
+    def transport(request):
+        if request.url.host == "login.microsoftonline.com":
+            return token_response()
+        writes.append(request)
+        return httpx.Response(201, json={"JournalBatchNumber": "JOURNAL-001"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        client = D365ODataClient(settings, D365AuthManager(settings, http), http)
+        result = await client.post("CustomerPaymentJournalHeaders", {"JournalName": "CustPay"})
+    assert result["JournalBatchNumber"] == "JOURNAL-001"
+    assert len(writes) == 1
+    assert writes[0].headers["Prefer"] == "return=representation"
+
+
+@pytest.mark.asyncio
 async def test_timeout_after_write_requires_verification(settings):
     def transport(request):
         if request.url.host == "login.microsoftonline.com":

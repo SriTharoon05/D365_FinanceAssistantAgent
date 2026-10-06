@@ -14,7 +14,7 @@ from pydantic import ValidationError
 from sqlalchemy import func, select, update
 
 from app.agent.graph import run_live_agent
-from app.agent.grounding import requires_finance_grounding
+from app.agent.grounding import requires_finance_grounding, write_placeholder_help
 from app.agent.mock import parse_date, run_mock_agent
 from app.agent.tools import READ_TOOLS, TOOL_SCHEMAS
 from app.core.errors import AppError
@@ -363,10 +363,21 @@ class ChatService:
                         ):
                             answer = "The earlier write has an unknown outcome. Verify its state in Dynamics 365 before preparing another operation."
                         elif all(action["status"] == "executed" for action in prior_actions):
-                            answer = "This request was already confirmed and executed. Its result is shown on the existing action card. Retrying the response will not repeat the ERP write."
+                            if any(
+                                (action.get("result") or {}).get("reconciled") for action in prior_actions
+                            ):
+                                answer = (
+                                    "The current record state for this confirmed request has been verified in "
+                                    "Dynamics 365. Its verification result is shown on the existing action card. "
+                                    "Retrying this response will not repeat the ERP write."
+                                )
+                            else:
+                                answer = "This request was already confirmed and executed. Its result is shown on the existing action card. Retrying the response will not repeat the ERP write."
                         else:
                             answer = "This request already has a confirmation card. Review that card; retrying the response will not create a second ERP operation."
                         await emit("message_delta", {"delta": answer})
+                    elif clarification := write_placeholder_help(message):
+                        await emit("message_delta", {"delta": clarification})
                     elif self.settings.d365_mock_mode and not self.settings.azure_openai_api_key:
                         # Follow-up field answers use intent and identifiers, never historical monetary facts.
                         routed_message = message

@@ -23,3 +23,15 @@ def requires_finance_grounding(message: str, identifiers: dict[str, Any] | None 
         return False
     # Short contextual follow-ups such as 'what about that?' refer to the selected customer.
     return bool((identifiers or {}).get("account") or (identifiers or {}).get("draft_invoice"))
+
+
+def write_placeholder_help(message: str) -> str | None:
+    """Explain an unresolved sample placeholder without making any current ERP claim."""
+    if re.search(r"[\[<]\s*(?:verified|valid)\s+(?:revenue\s+)?account\s*[\]>]", message, re.I):
+        return (
+            "The revenue account is a real general-ledger main account in your Dynamics 365 company's "
+            "chart of accounts, separate from the customer account. Ask 'Show available revenue accounts "
+            "for this company', or replace the placeholder with 'using the configured revenue account'. "
+            "The app verifies the account before preparing an invoice confirmation. No action was prepared."
+        )
+    return None

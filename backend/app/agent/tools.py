@@ -3,7 +3,7 @@
 import json
 from collections.abc import Awaitable, Callable
 from datetime import date
-from typing import Any
+from typing import Any, Literal
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -35,7 +35,18 @@ class InvoiceArguments(CompanyArguments):
     identifier: str = Field(min_length=1, max_length=100)
 
 
+class WriteSetupArguments(CompanyArguments):
+    purpose: Literal["invoice", "payment", "customer", "all"] = "all"
+
+
 READ_TOOLS: dict[str, tuple[type[BaseModel], str]] = {
+    "get_write_setup": (
+        WriteSetupArguments,
+        "Read verified setup choices and configured defaults for invoice revenue accounts, payment "
+        "journal names and customer payment terms in the selected company. A revenue account is a "
+        "general-ledger MainAccountId, not a customer or bank account. Never invent or silently choose "
+        "a different account; show valid choices if the configured default cannot be verified.",
+    ),
     "search_customers": (
         SearchArguments,
         "Find customers by account or name. Ask the user to choose if multiple match.",

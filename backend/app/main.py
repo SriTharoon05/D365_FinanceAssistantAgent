@@ -405,6 +405,12 @@ def create_app(settings=None, runtime=None):
             identifier, body.conversation_id, owner_id, request.state.request_id
         )
 
+    @app.post("/api/actions/{identifier}/verify")
+    async def verify_action(identifier: str, body: ActionRequest, request: Request, owner_id=Depends(owner)):
+        return await request.app.state.actions.verify(
+            identifier, body.conversation_id, owner_id, request.state.request_id
+        )
+
     @app.post("/api/voice/transcribe")
     async def transcribe(
         file: UploadFile = File(...),

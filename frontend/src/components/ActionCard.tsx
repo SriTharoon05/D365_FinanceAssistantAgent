@@ -12,7 +12,7 @@ interface Props {
 }
 export function ActionCard({ action, conversationId, onUpdated, onError }: Props) {
   const [current, setCurrent] = useState(action);
-  const [busy, setBusy] = useState<'confirm' | 'cancel' | null>(null);
+  const [busy, setBusy] = useState<'confirm' | 'cancel' | 'verify' | null>(null);
   const [now, setNow] = useState(Date.now());
   useEffect(() => {
     setCurrent(action);
@@ -27,7 +27,7 @@ export function ActionCard({ action, conversationId, onUpdated, onError }: Props
     (['pending', 'awaiting_confirmation'].includes(current.status) &&
       new Date(current.expires_at).valueOf() <= now);
   const pending = ['pending', 'awaiting_confirmation'].includes(current.status) && !expired;
-  const choose = async (choice: 'confirm' | 'cancel') => {
+  const choose = async (choice: 'confirm' | 'cancel' | 'verify') => {
     setBusy(choice);
     try {
       const result = await endpoints.action(current.id, choice, conversationId);
@@ -45,6 +45,15 @@ export function ActionCard({ action, conversationId, onUpdated, onError }: Props
     }
   };
   const successful = ['executed', 'completed', 'confirmed', 'succeeded'].includes(current.status);
+  const needsVerification = ['unknown', 'verification_required'].includes(current.status);
+  const canVerify =
+    needsVerification &&
+    [
+      'update_customer',
+      'delete_test_customer',
+      'update_draft_free_text_invoice',
+      'delete_draft_free_text_invoice',
+    ].includes(current.action_type);
   const rawResult = current.result?.result;
   const result =
     rawResult && typeof rawResult === 'object'
@@ -53,6 +62,18 @@ export function ActionCard({ action, conversationId, onUpdated, onError }: Props
   const reference =
     result?.identifier || result?.journal_number || result?.reference || result?.external_id;
   const instructions = result?.manual_instructions;
+  const reconciled = current.result?.reconciled === true || result?.reconciled === true;
+  const rawMessage = current.result?.message || result?.message;
+  const errorMessage = typeof rawMessage === 'string' ? rawMessage : null;
+  const details = current.result?.details;
+  const rawCauseCode =
+    current.result?.cause_code ||
+    result?.cause_code ||
+    (details && typeof details === 'object' && !Array.isArray(details)
+      ? (details as Record<string, unknown>).cause_code
+      : null) ||
+    current.result?.code;
+  const causeCode = typeof rawCauseCode === 'string' ? rawCauseCode : null;
   return (
     <section
       className={`action-card ${pending ? 'pending' : ''}`}
@@ -66,6 +87,8 @@ export function ActionCard({ action, conversationId, onUpdated, onError }: Props
             <Clock3 size={19} />
           ) : current.status === 'cancelled' ? (
             <XCircle size={19} />
+          ) : needsVerification || current.status === 'failed' ? (
+            <AlertTriangle size={19} />
           ) : (
             <ShieldCheck size={19} />
           )}
@@ -150,15 +173,55 @@ export function ActionCard({ action, conversationId, onUpdated, onError }: Props
           </small>
         </>
       ) : (
-        <p className="action-result">
-          {expired
-            ? 'Ask the assistant to prepare a new action after reviewing current ERP data.'
-            : successful
-              ? 'The confirmed result is recorded in the audit history.'
-              : current.status === 'cancelled'
-                ? 'Cancelled. No ERP change was made.'
-                : 'Review the audit history for the outcome before preparing another action.'}
-        </p>
+        <>
+          <p className="action-result">
+            {expired
+              ? 'Ask the assistant to prepare a new action after reviewing current ERP data.'
+              : successful
+                ? reconciled
+                  ? 'The current record state was verified in Dynamics 365 and recorded in the audit history.'
+                  : 'The confirmed result is recorded in the audit history.'
+                : current.status === 'cancelled'
+                  ? 'Cancelled. No ERP change was made.'
+                  : current.status === 'executing'
+                    ? 'The confirmed action is being processed. Its outcome will appear when available.'
+                    : needsVerification
+                      ? 'The write outcome is uncertain. Verify the current record state before preparing another action.'
+                      : current.status === 'failed'
+                        ? 'The action did not complete. Review the error before preparing a new action.'
+                        : 'Review the audit history for the outcome before preparing another action.'}
+          </p>
+          {(needsVerification || current.status === 'failed') && errorMessage && (
+            <p className="action-result">{errorMessage}</p>
+          )}
+          {(needsVerification || current.status === 'failed') && causeCode && (
+            <small>Error code: {causeCode}</small>
+          )}
+          {canVerify && (
+            <div className="action-controls">
+              <button
+                className="button secondary"
+                onClick={() => void choose('verify')}
+                disabled={!!busy}
+              >
+                {busy === 'verify' ? (
+                  <Spinner label="Checking…" />
+                ) : (
+                  <>
+                    <ShieldCheck size={15} />
+                    Verify in D365
+                  </>
+                )}
+              </button>
+              <small>Checks the current record without repeating the write.</small>
+            </div>
+          )}
+          {needsVerification && !canVerify && (
+            <small>
+              Check the affected record directly in Dynamics 365 before preparing another action.
+            </small>
+          )}
+        </>
       )}
     </section>
   );

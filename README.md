@@ -26,6 +26,8 @@ flowchart LR
 
 Posting and settlement remain manual in Dynamics 365. The application does not modify or delete posted accounting transactions.
 
+Before proposing a draft invoice or payment journal, the assistant can check the configured revenue account and journal setup against live D365 records. An uncertain write outcome requires reconciliation in D365 before another action is prepared; repeating confirmation never resubmits that write.
+
 ## Stack
 
 React, strict TypeScript, Vite, Tailwind CSS, Radix primitives, TanStack Query and React Router; Python 3.13.3, FastAPI, Pydantic v2, async SQLAlchemy, Alembic, SQLite, httpx, LangGraph and Azure OpenAI. Vitest/Testing Library and pytest cover the application without live external services.

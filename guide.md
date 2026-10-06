@@ -224,7 +224,7 @@ Treat this value as a secret. Changing it invalidates existing signed browser se
 | `D365_CUSTOMER_POSTING_PROFILE` | `GEN`; customer posting profile. |
 | `D365_REVENUE_ACCOUNT` | `401100`; draft invoice line revenue account. |
 
-The observed journal/account defaults are starting configuration, not proof that a different environment permits them. Live business state and supported entity fields must pass validation before a write is offered or executed.
+The observed journal/account defaults are starting configuration, not proof that a different environment permits them. Live business state and supported entity fields must pass validation before a write is offered or executed. `D365_REVENUE_ACCOUNT` is a general-ledger **main account ID**, distinct from the customer account and payment bank account; the configured `401100` is used only if live validation succeeds.
 
 Entity collection configuration:
 
@@ -485,11 +485,14 @@ With live credentials use your real customer identifiers. In mock mode use the s
 - “Create a test customer called TEST-ACME-001.”
 - “Update the payment terms for TEST-ACME-001 to NET30.”
 - “Delete TEST-ACME-001.”
-- “Create a draft INR 5,000 invoice for AST-001 due on 30 October 2026.”
+- “Check my configured customer payment journal and draft invoice revenue account setup.”
+- “Create a draft INR 5,000 invoice for AST-001 due on 30 October 2026 using the configured revenue account.”
 - “Change the due date of that draft invoice.”
 - “Create an unposted customer payment journal, then add a payment line for AST-001.”
 
 The assistant asks for clarification when a required field is missing or multiple customers match. For a payment, journal header creation and line addition are separate supported actions; provide the returned journal reference and an explicit line number when adding a line. Reminders are saved drafts only; the application does not send email.
+
+For an invoice line, “account” means `MainAccounts.MainAccountId`, written through `MainAccountDisplayValue`. A phrase such as `[verified account]` is a placeholder, not an account number. The read-only `get_write_setup` tool accepts purpose `invoice`, `payment`, `customer` or `all` and returns candidates, source evidence and `configured_default.verified` where a default applies. When an invoice line omits its revenue account, the backend validates `D365_REVENUE_ACCOUNT` in the company's chart of accounts and requires Revenue type, a non-suspended account and manual posting allowed. It does not silently choose a different account. If validation fails, identify an appropriate real account in D365 and supply its ID explicitly or correct the configuration and restart.
 
 ## ERP write safety
 
@@ -499,15 +502,17 @@ Repeated confirmation of an already executed action returns its stored result; c
 
 Customer creation/update uses `CustomersV3`. Deletion is restricted to configured test prefixes and must verify there are no financial transactions; a customer such as `AST-001` is not eligible. Safe-field schemas constrain updates.
 
+Customer update/delete addresses both the company and customer account. After D365 acknowledges the request, the backend performs at most three read-only verification attempts; it does not send the mutation again. Updated fields must match, or a company-scoped read must confirm deletion. A permission or network error is not evidence that the record is absent.
+
 Draft invoice operations use `CDSFreeTextInvoiceHeaders` and `CDSFreeTextInvoiceLines`. The backend checks the unposted state before updating or deleting. Invoice lines use `MainAccountDisplayValue`, not an invented `MainAccount` property. Posted invoices are immutable because changing posted accounting records would bypass ledger controls and audit integrity.
 
 Payment preparation uses `CustomerPaymentJournalHeaders` and `CustomerPaymentJournalLines`, with explicit line numbers. The reusable account-display helper escapes segment delimiters such as the hyphen in `AST-001`. Configuration and metadata are checked rather than treating observed tenant defaults as universally valid.
 
-Live writes also need sufficient public setup metadata/data to verify their business configuration. Depending on the action, the backend looks for compatible journal-name, bank-account, customer-payment-mode, customer-posting-profile and payment-term entities, and verifies the revenue account permits posting. If those entities/fields are unavailable to the mapped D365 user, the write fails closed with a capability diagnostic; the assistant does not substitute mock configuration. A connected read workflow therefore does not prove every mutation is available in a particular tenant.
+Live writes also need sufficient public setup metadata/data to verify their business configuration. The supplied schema uses `JournalNames` with `Name` and `Type`, `PaymentTerms` with `Name`, `CustomerPaymentMethods` with `Name`, `CustomerPostingProfiles` with `PostingProfile`, and `BankAccounts` with `BankAccountId`; those setup records are company-scoped. `MainAccounts` is scoped by `ChartOfAccounts` and `MainAccountId`, so the company's ledger/chart is checked separately. Read-only setup discovery validates the configured defaults, including a customer-payment journal type and usable revenue account; schema presence alone does not verify their values. If required entities, fields or permissions are unavailable, the write fails closed with a capability diagnostic and never substitutes mock configuration. A connected read workflow therefore does not prove every mutation is available.
 
 **Automatic posting and settlement are not enabled.** Open the created unposted customer payment journal in D365, review the customer/bank accounts, amount/currency, reference and invoice settlement, then validate and post using standard Finance & Operations controls and your approved permissions. A prepared payment line is not proof of posted payment or a reduced live customer balance.
 
-The HTTP layer never blindly retries an ambiguous financial write. If the network fails after a request may have reached D365, inspect the ERP record and audit/reference before trying again. Multi-step invoice/journal preparation is not a distributed transaction; any partial outcome needs explicit review. A returned confirmation is not a claim that the ERP write succeeded.
+The HTTP layer never blindly retries an ambiguous financial write. `D365_WRITE_OUTCOME_UNKNOWN` means a request may have reached D365; `D365_WRITE_VERIFICATION_FAILED` means an acknowledged result could not be verified by readback. Neither establishes that nothing changed. Keep the action/request ID and audit entry, reconnect if needed for read-only checks, then inspect the exact company/customer or invoice/journal reference in D365. Verify the requested fields or deletion and any partial records before deciding whether a new action is needed. Do not repeat the write to test its outcome. Multi-step invoice/journal preparation is not a distributed transaction; any partial outcome needs explicit review. A confirmation card is not proof of ERP success.
 
 ## Troubleshooting
 

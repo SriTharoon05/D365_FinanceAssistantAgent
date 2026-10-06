@@ -19,6 +19,9 @@ class FakeFinance:
         self.blocked = False
         self.unknown = False
         self.delay = False
+        self.not_written_error = None
+        self.reconciliations = 0
+        self.verification_error = None
 
     async def validate_mutation(self, action_type, payload, company):
         self.validations += 1
@@ -35,11 +38,19 @@ class FakeFinance:
 
     async def execute_mutation(self, action_type, payload, company):
         self.executions += 1
+        if self.not_written_error:
+            raise self.not_written_error
         if self.delay:
             await asyncio.sleep(0.03)
         if self.unknown:
             raise AppError("operation_outcome_unknown", "Verify ERP state before retrying.", status_code=502)
         return {"reference": payload.get("account"), "verified": True}
+
+    async def reconcile_mutation(self, action_type, payload, company):
+        self.reconciliations += 1
+        if self.verification_error:
+            raise self.verification_error
+        return {"company": company, "result": {"identifier": payload["account"], "verified": True}}
 
 
 @pytest.fixture
@@ -157,3 +168,100 @@ async def test_unknown_outcome_is_audited_and_never_retried(action_setup):
     async with sessions() as session:
         audit = await session.scalar(select(AuditEvent))
     assert audit.result_status == "unknown"
+
+
+async def uncertain_update(setup):
+    service, finance, _, conversation_id, owner_id, _ = setup
+    action = await service.propose(
+        "update_customer", {"account": "TEST-001", "name": "Updated"}, conversation_id, owner_id, "usmf"
+    )
+    finance.unknown = True
+    with pytest.raises(AppError, match="requires verification"):
+        await service.confirm(action["id"], conversation_id, owner_id, "uncertain-update")
+    return action
+
+
+async def test_known_refusal_is_failed_and_retains_specific_error(action_setup):
+    service, finance, sessions, conversation_id, owner_id, _ = action_setup
+    action = await proposal(action_setup)
+    finance.not_written_error = AppError(
+        "D365_PERMISSION_ERROR",
+        "The mapped D365 user cannot update this entity.",
+        status_code=403,
+        details={"upstream_status": 403, "write_outcome": "not_written"},
+    )
+    with pytest.raises(AppError) as error:
+        await service.confirm(action["id"], conversation_id, owner_id, "refused")
+    assert error.value.code == "D365_PERMISSION_ERROR"
+    assert error.value.status_code == 403
+    async with sessions() as session:
+        stored = await session.get(PendingAction, action["id"])
+        audit = await session.scalar(select(AuditEvent))
+    assert stored.status == "failed"
+    assert stored.result["message"] == "The mapped D365 user cannot update this entity."
+    assert audit.result_status == "failed"
+
+
+async def test_read_only_reconciliation_resolves_unknown_without_reexecution(action_setup):
+    service, finance, sessions, conversation_id, owner_id, _ = action_setup
+    action = await uncertain_update(action_setup)
+    result = await service.verify(action["id"], conversation_id, owner_id, "verify")
+    repeat = await service.verify(action["id"], conversation_id, owner_id, "verify-again")
+    assert result == repeat
+    assert result["status"] == "executed"
+    assert result["result"]["reconciled"] is True
+    assert result["result"]["verification_basis"] == "current_record_state"
+    assert result["result"]["previous_error"]["code"] == "operation_outcome_unknown"
+    assert finance.executions == 1
+    assert finance.reconciliations == 1
+    async with sessions() as session:
+        audits = list((await session.scalars(select(AuditEvent))).all())
+    assert len(audits) == 2
+    assert all(audit.result_status == "verified" for audit in audits)
+    assert any(
+        audit.action == "verify_operation" and audit.safe_request_summary["read_only"] for audit in audits
+    )
+    with pytest.raises(AppError):
+        # An observed success also prevents the original confirmation from running again.
+        await service.cancel(action["id"], conversation_id, owner_id, "cancel-after-verification")
+
+
+async def test_reconciliation_failure_leaves_original_uncertainty_and_audit(action_setup):
+    service, finance, sessions, conversation_id, owner_id, _ = action_setup
+    action = await uncertain_update(action_setup)
+    finance.verification_error = AppError(
+        "D365_WRITE_VERIFICATION_FAILED",
+        "The current name does not match the requested change.",
+        status_code=409,
+    )
+    with pytest.raises(AppError, match="does not match"):
+        await service.verify(action["id"], conversation_id, owner_id, "verify-mismatch")
+    assert finance.executions == 1
+    async with sessions() as session:
+        stored = await session.get(PendingAction, action["id"])
+        audits = list((await session.scalars(select(AuditEvent))).all())
+    assert stored.status == "unknown"
+    assert len(audits) == 1 and audits[0].result_status == "unknown"
+
+
+async def test_verification_checks_ownership_and_uncertain_status(action_setup):
+    service, finance, _, conversation_id, owner_id, other_id = action_setup
+    action = await uncertain_update(action_setup)
+    with pytest.raises(AppError, match="not found"):
+        await service.verify(action["id"], conversation_id, other_id, "other-owner")
+    assert finance.reconciliations == 0
+    pending = await proposal(action_setup)
+    with pytest.raises(AppError, match="uncertain"):
+        await service.verify(pending["id"], conversation_id, owner_id, "pending")
+    assert finance.executions == 1
+
+
+async def test_unknown_creation_requires_manual_verification_without_repeating_write(action_setup):
+    service, finance, _, conversation_id, owner_id, _ = action_setup
+    action = await proposal(action_setup)
+    finance.unknown = True
+    with pytest.raises(AppError):
+        await service.confirm(action["id"], conversation_id, owner_id, "unknown-create")
+    with pytest.raises(AppError, match="directly"):
+        await service.verify(action["id"], conversation_id, owner_id, "unsupported-verify")
+    assert finance.executions == 1 and finance.reconciliations == 0

@@ -173,6 +173,22 @@ async def test_explicit_overdue_date_routes_to_backend(chat_setup):
     assert ("get_overdue_invoices", "AST-001", "2026-10-05") in finance.calls
 
 
+async def test_invoice_sample_placeholder_gets_actionable_help_without_erp_claim(chat_setup):
+    _, finance, _, _, _ = chat_setup
+    events = await turn(
+        chat_setup,
+        "Create an unposted invoice for TEST-002, INR 100, using revenue account [verified account].",
+    )
+    text = "".join(payload["delta"] for name, payload in events if name == "message_delta")
+    assert "general-ledger main account" in text
+    assert "configured revenue account" in text
+    assert "No action was prepared" in text
+    assert "couldn't verify current finance data" not in text
+    assert events[-1][1]["status"] == "completed"
+    assert finance.calls == []
+    assert not any(name in {"pending_action", "error"} for name, _ in events)
+
+
 def test_tool_schema_rejects_arbitrary_odata_and_dates_are_not_guessed():
     with pytest.raises(ValueError):
         TOOL_SCHEMAS["get_customer_balance"].model_validate({"account": "AST-001", "$filter": "1 eq 1"})
