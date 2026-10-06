@@ -1144,9 +1144,6 @@ svg {
 .user-message .markdown a {
   color: var(--user-text);
 }
-.user-message .markdown p {
-  white-space: pre-wrap;
-}
 .user-message .markdown code,
 .user-message .markdown pre,
 .user-message .markdown blockquote,
@@ -1186,6 +1183,11 @@ svg {
   flex: 1;
   min-width: 0;
 }
+.assistant-message .message-body {
+  flex: 0 1 720px;
+  max-width: min(80%, 720px);
+  overflow-wrap: anywhere;
+}
 .message-author {
   display: flex;
   align-items: center;
@@ -1215,6 +1217,7 @@ svg {
 }
 .markdown p {
   margin: 0 0 13px;
+  white-space: pre-wrap;
 }
 .markdown p:last-child {
   margin-bottom: 0;
@@ -2341,7 +2344,8 @@ input[type='range'] {
     gap: 8px;
     padding: 13px 0;
   }
-  .user-message .message-body {
+  .user-message .message-body,
+  .assistant-message .message-body {
     max-width: calc(100% - 36px);
   }
   .message-bubble {
