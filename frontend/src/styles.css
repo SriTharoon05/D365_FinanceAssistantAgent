@@ -908,7 +908,7 @@ svg {
 }
 .composer-area {
   padding: 12px 0 14px;
-  width: calc(100% - 64px);
+  width: min(100% - 64px, 960px);
   margin: 0 auto;
   position: relative;
   flex-shrink: 0;
@@ -979,6 +979,8 @@ svg {
   background: none;
   font-size: 12px;
   line-height: 1.7;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 .composer textarea:focus-visible {
   outline: none;
@@ -1098,7 +1100,7 @@ svg {
   font-size: 11px;
 }
 .messages {
-  width: calc(100% - 64px);
+  width: min(100% - 64px, 960px);
   margin: 0 auto;
   padding: 24px 0 12px;
 }
@@ -1113,7 +1115,7 @@ svg {
 }
 .user-message .message-body {
   flex: 0 1 auto;
-  max-width: 78%;
+  max-width: min(70%, 560px);
 }
 .user-message .message-author,
 .user-message .message-actions {
@@ -1141,6 +1143,9 @@ svg {
 }
 .user-message .markdown a {
   color: var(--user-text);
+}
+.user-message .markdown p {
+  white-space: pre-wrap;
 }
 .user-message .markdown code,
 .user-message .markdown pre,

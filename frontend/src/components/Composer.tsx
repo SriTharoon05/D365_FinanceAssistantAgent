@@ -1,4 +1,4 @@
-import { useRef } from 'react';
+import { useLayoutEffect, useRef } from 'react';
 import { ArrowUp, Mic, Square, X, LoaderCircle, AudioLines, Sparkles } from 'lucide-react';
 import type { Capabilities } from '../types';
 import { useRecorder } from '../hooks/useRecorder';
@@ -37,6 +37,17 @@ export function Composer({
     capabilities?.voice_max_upload_mb || 20,
   );
   const voiceReady = capabilities?.voice_input ?? false;
+  useLayoutEffect(() => {
+    const resize = () => {
+      const input = textarea.current;
+      if (!input) return;
+      input.style.height = 'auto';
+      input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
+    };
+    resize();
+    window.addEventListener('resize', resize);
+    return () => window.removeEventListener('resize', resize);
+  }, [value, recorder.state]);
   const send = () => {
     if (value.trim() && !streaming && !disabled) onSend(value.trim());
   };
@@ -52,11 +63,7 @@ export function Composer({
                 aria-label="Message Finance Assistant"
                 placeholder="Ask a question or describe a finance task…"
                 value={value}
-                onChange={(event) => {
-                  onChange(event.target.value);
-                  event.target.style.height = 'auto';
-                  event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
-                }}
+                onChange={(event) => onChange(event.target.value)}
                 onKeyDown={(event) => {
                   if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
                     event.preventDefault();
