@@ -66,7 +66,10 @@ export function MessageView({
     }
   };
   return (
-    <article className={`message ${assistant ? 'assistant-message' : 'user-message'}`}>
+    <article
+      className={`message ${assistant ? 'assistant-message' : 'user-message'}`}
+      aria-label={assistant ? 'Finance Assistant message' : 'Your message'}
+    >
       <div className="message-avatar" aria-hidden="true">
         {assistant ? <Sparkles size={17} /> : 'You'}
       </div>
@@ -76,43 +79,45 @@ export function MessageView({
           <span>{formatDate(message.created_at, true)}</span>
           {assistant && message.model && <span className="message-model">{message.model}</span>}
         </div>
-        {message.status === 'error' ? (
-          <div className="message-error" role="alert">
-            <AlertCircle size={18} />
-            <div>
-              <strong>Unable to complete this response</strong>
-              <p>
-                {message.content ||
-                  'The assistant is currently unavailable. Your message has been saved; retry when the service is ready.'}
-              </p>
-              {message.error_code && <small>{message.error_code}</small>}
+        <div className="message-bubble">
+          {message.status === 'error' ? (
+            <div className="message-error" role="alert">
+              <AlertCircle size={18} />
+              <div>
+                <strong>Unable to complete this response</strong>
+                <p>
+                  {message.content ||
+                    'The assistant is currently unavailable. Your message has been saved; retry when the service is ready.'}
+                </p>
+                {message.error_code && <small>{message.error_code}</small>}
+              </div>
             </div>
-          </div>
-        ) : (
-          <div className={`markdown ${streaming ? 'is-streaming' : ''}`}>
-            <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
-              skipHtml
-              components={{
-                a: ({ href, children }) => (
-                  <a href={href} target="_blank" rel="noopener noreferrer">
-                    {children}
-                  </a>
-                ),
-                table: ({ children }) => (
-                  <div className="table-container">
-                    <table>{children}</table>
-                  </div>
-                ),
-              }}
-            >
-              {message.content || (streaming ? ' ' : '')}
-            </ReactMarkdown>
-          </div>
-        )}
-        {message.status === 'interrupted' && (
-          <p className="muted text-sm">Generation stopped. This response may be incomplete.</p>
-        )}
+          ) : (
+            <div className={`markdown ${streaming ? 'is-streaming' : ''}`}>
+              <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                skipHtml
+                components={{
+                  a: ({ href, children }) => (
+                    <a href={href} target="_blank" rel="noopener noreferrer">
+                      {children}
+                    </a>
+                  ),
+                  table: ({ children }) => (
+                    <div className="table-container">
+                      <table>{children}</table>
+                    </div>
+                  ),
+                }}
+              >
+                {message.content || (streaming ? ' ' : '')}
+              </ReactMarkdown>
+            </div>
+          )}
+          {message.status === 'interrupted' && (
+            <p className="muted text-sm">Generation stopped. This response may be incomplete.</p>
+          )}
+        </div>
         {evidence.length > 0 && (
           <EvidenceCards records={evidence} onOpen={() => onEvidence(evidence)} />
         )}

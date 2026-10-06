@@ -9,41 +9,53 @@
     BlinkMacSystemFont,
     Arial,
     sans-serif;
-  color: #25364d;
-  background: #f8fafc;
+  font-size: 17px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
   font-synthesis: none;
-  --bg: #f8fafc;
+  --bg: #e8eef6;
   --surface: #fff;
-  --surface-alt: #f3f6fa;
-  --sidebar: #fff;
-  --text: #25364d;
-  --heading: #152c49;
-  --muted: #758298;
-  --border: #e4e9f0;
-  --accent: #244e80;
-  --accent-hover: #1c406b;
-  --accent-soft: #edf3fb;
-  --green: #25755a;
-  --green-soft: #eef8f3;
-  --amber: #91610f;
-  --amber-soft: #fff9ec;
-  --red: #a9353e;
-  --red-soft: #fff2f3;
-  --shadow: 0 5px 20px #172e4c08;
+  --surface-alt: #eaf0f8;
+  --sidebar: #f8fafd;
+  --text: #1c3049;
+  --heading: #102843;
+  --muted: #485c75;
+  --border: #8597b0;
+  --border-strong: #607995;
+  --accent: #1d4e89;
+  --accent-hover: #153d6e;
+  --accent-soft: #dce8f8;
+  --accent-contrast: #fff;
+  --user-bubble: #d8e7fc;
+  --user-border: #7094c2;
+  --user-text: #163251;
+  --green: #1d6849;
+  --green-soft: #e7f5ed;
+  --amber: #7c510b;
+  --amber-soft: #fff2d8;
+  --red: #9e2733;
+  --red-soft: #ffebed;
+  --shadow: 0 4px 16px #172e4c14;
 }
 :root.dark {
   color-scheme: dark;
-  --bg: #101923;
-  --surface: #17232f;
-  --surface-alt: #1c2b3a;
-  --sidebar: #14212d;
-  --text: #d3deea;
-  --heading: #edf4fc;
-  --muted: #91a3b7;
-  --border: #2b3d4e;
-  --accent: #91b9ed;
-  --accent-hover: #b7d2f5;
-  --accent-soft: #22384e;
+  --bg: #0c1523;
+  --surface: #18273b;
+  --surface-alt: #22354e;
+  --sidebar: #142236;
+  --text: #e6edf6;
+  --heading: #f7faff;
+  --muted: #aec0d7;
+  --border: #637a97;
+  --border-strong: #8ba0bb;
+  --accent: #9bc4ff;
+  --accent-hover: #c2dcff;
+  --accent-soft: #203b5b;
+  --accent-contrast: #10243e;
+  --user-bubble: #254975;
+  --user-border: #8badd8;
+  --user-text: #f4f8ff;
   --green: #80d2ae;
   --green-soft: #19372e;
   --amber: #e1ba72;
@@ -118,7 +130,7 @@ svg {
 }
 .muted {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1.65;
 }
 .button {
@@ -127,13 +139,13 @@ svg {
   justify-content: center;
   gap: 8px;
   background: var(--accent);
-  color: var(--surface);
+  color: var(--accent-contrast);
   border: 1px solid transparent;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 600;
-  padding: 10px 15px;
-  min-height: 39px;
+  padding: 11px 17px;
+  min-height: 44px;
 }
 .dark .button {
   color: #142332;
@@ -152,8 +164,8 @@ svg {
 }
 .button.small {
   padding: 7px 11px;
-  font-size: 12px;
-  min-height: 32px;
+  font-size: 16px;
+  min-height: 38px;
 }
 .button.danger {
   background: #b93645;
@@ -169,12 +181,16 @@ svg {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 31px;
-  height: 31px;
+  width: 38px;
+  height: 38px;
   padding: 0;
   color: var(--muted);
   background: transparent;
   border-radius: 6px;
+}
+.icon-button svg {
+  width: 18px;
+  height: 18px;
 }
 .icon-button:hover:not(:disabled),
 .icon-button.selected {
@@ -188,7 +204,7 @@ svg {
   color: var(--accent);
   background: transparent;
   padding: 0;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
 }
 .text-button:hover {
@@ -205,7 +221,7 @@ svg {
 .sidebar {
   display: flex;
   flex-direction: column;
-  width: 274px;
+  width: 304px;
   flex-shrink: 0;
   background: var(--sidebar);
   border-right: 1px solid var(--border);
@@ -229,13 +245,13 @@ svg {
   box-shadow: 0 3px 6px #152c4914;
 }
 .brand strong {
-  font-size: 15px;
+  font-size: 20px;
   color: var(--heading);
   letter-spacing: -0.25px;
 }
 .brand span {
   display: block;
-  font-size: 8px;
+  font-size: 12px;
   letter-spacing: 1.25px;
   font-weight: 600;
   color: var(--muted);
@@ -245,13 +261,13 @@ svg {
   width: 100%;
   justify-content: flex-start;
   padding: 11px 12px;
-  font-size: 12px;
+  font-size: 16px;
   order: 1;
 }
 .shortcut {
   margin-left: auto;
   color: #d8e5f5;
-  font-size: 10px;
+  font-size: 14px;
   opacity: 0.7;
 }
 .dark .shortcut {
@@ -265,7 +281,7 @@ svg {
   margin: 18px 0 4px;
   color: var(--muted);
   background: var(--surface-alt);
-  border: 1px solid transparent;
+  border: 1px solid var(--border);
   border-radius: 7px;
   order: 2;
 }
@@ -279,7 +295,7 @@ svg {
   outline: 0;
   background: none;
   color: var(--text);
-  font-size: 11px;
+  font-size: 15px;
 }
 .sidebar-search input:focus-visible {
   outline: none;
@@ -296,7 +312,7 @@ svg {
   background: transparent;
   padding: 8px 9px;
   text-align: left;
-  font-size: 10px;
+  font-size: 14px;
   border-radius: 6px;
 }
 .archived-button.active {
@@ -316,7 +332,7 @@ svg {
 .conversation-list section h3 {
   text-transform: uppercase;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 1px;
   padding: 22px 10px 9px;
@@ -326,15 +342,15 @@ svg {
   align-items: center;
   border: 1px solid transparent;
   border-radius: 7px;
-  min-height: 39px;
+  min-height: 48px;
   margin: 3px 0;
 }
 .conversation-item:hover {
   background: var(--surface-alt);
 }
 .conversation-item.active {
-  background: var(--accent-soft);
-  border-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  background: var(--accent);
+  border-color: var(--accent);
 }
 .conversation-select {
   display: flex;
@@ -346,14 +362,20 @@ svg {
   background: transparent;
   text-align: left;
   padding: 11px 8px;
-  font-size: 11px;
+  font-size: 15px;
 }
 .conversation-select svg {
   color: var(--muted);
 }
 .conversation-item.active .conversation-select,
 .conversation-item.active .conversation-select svg {
-  color: var(--accent);
+  color: var(--accent-contrast);
+}
+.conversation-item.active .conversation-menu {
+  color: var(--accent-contrast);
+}
+.conversation-item.active .conversation-menu:hover {
+  background: color-mix(in srgb, var(--accent-contrast) 16%, transparent);
 }
 .conversation-select span {
   text-overflow: ellipsis;
@@ -361,8 +383,8 @@ svg {
   white-space: nowrap;
 }
 .conversation-menu {
-  width: 24px;
-  height: 26px;
+  width: 34px;
+  height: 36px;
   margin-right: 3px;
   opacity: 0;
   flex-shrink: 0;
@@ -381,17 +403,17 @@ svg {
   padding: 47px 10px;
 }
 .history-empty p {
-  font-size: 12px;
+  font-size: 16px;
   margin: 12px 0 5px;
   color: var(--text);
 }
 .history-empty span {
-  font-size: 10px;
+  font-size: 14px;
 }
 .sidebar-error {
   order: 5;
   padding: 12px;
-  font-size: 11px;
+  font-size: 15px;
   color: var(--red);
 }
 .sidebar-error button {
@@ -414,12 +436,12 @@ svg {
 .workspace-note strong {
   display: block;
   color: var(--text);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 500;
 }
 .workspace-note span {
   display: block;
-  font-size: 9px;
+  font-size: 13px;
   margin-top: 5px;
 }
 .settings-button {
@@ -430,14 +452,14 @@ svg {
   width: 100%;
   color: var(--text);
   background: transparent;
-  font-size: 11px;
+  font-size: 15px;
 }
 .settings-button:hover {
   color: var(--accent);
 }
 .version {
   margin-left: auto;
-  font-size: 9px;
+  font-size: 13px;
   color: var(--muted);
 }
 .profile {
@@ -455,7 +477,7 @@ svg {
   color: var(--accent);
   background: var(--accent-soft);
   border: 1px solid var(--border);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
   border-radius: 50%;
 }
@@ -463,12 +485,12 @@ svg {
   display: block;
   color: var(--text);
   font-weight: 500;
-  font-size: 10px;
+  font-size: 14px;
 }
 .profile div span {
   display: block;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   margin-top: 4px;
 }
 .profile > svg {
@@ -483,8 +505,8 @@ svg {
   background: var(--bg);
 }
 .topbar {
-  height: 81px;
-  min-height: 81px;
+  height: 88px;
+  min-height: 88px;
   background: var(--surface);
   border-bottom: 1px solid var(--border);
   display: flex;
@@ -498,19 +520,23 @@ svg {
   align-items: center;
   gap: 12px;
   min-width: 0;
+  flex: 1;
+}
+.topbar-title > div {
+  min-width: 0;
 }
 .header-icon {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 40px;
+  height: 40px;
   border: 1px solid var(--border);
   color: var(--accent);
   border-radius: 7px;
 }
 .topbar-title h2 {
   color: var(--heading);
-  font-size: 13px;
+  font-size: 17px;
   font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
@@ -518,19 +544,19 @@ svg {
   max-width: 440px;
 }
 .topbar-title div > span {
-  font-size: 10px;
+  font-size: 14px;
   display: block;
   margin-top: 5px;
   color: var(--muted);
 }
 .header-breadcrumb {
   color: var(--muted);
-  opacity: 0.75;
 }
 .header-controls {
   display: flex;
   align-items: center;
   gap: 13px;
+  flex-shrink: 0;
 }
 .company-pill {
   display: inline-flex;
@@ -539,7 +565,7 @@ svg {
   color: var(--text);
   background: var(--surface-alt);
   border: 1px solid var(--border);
-  font-size: 10px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: 0.45px;
   border-radius: 5px;
@@ -549,7 +575,7 @@ svg {
   align-items: center;
   gap: 7px;
   white-space: nowrap;
-  font-size: 10px;
+  font-size: 14px;
   color: var(--text);
   background: var(--surface);
   padding: 6px 10px;
@@ -558,13 +584,13 @@ svg {
 }
 .connection-label strong {
   color: var(--green);
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 500;
   padding-left: 8px;
 }
 .connection-dot {
-  height: 6px;
-  width: 6px;
+  height: 8px;
+  width: 8px;
   border-radius: 50%;
   background: var(--green);
 }
@@ -591,16 +617,16 @@ svg {
   margin: 16px 33px 0;
   padding: 13px 16px;
   background: var(--amber-soft);
-  border: 1px solid color-mix(in srgb, var(--amber) 20%, transparent);
+  border: 1px solid color-mix(in srgb, var(--amber) 55%, transparent);
   color: var(--amber);
   border-radius: 8px;
 }
 .connection-banner strong {
-  font-size: 12px;
+  font-size: 16px;
   display: block;
 }
 .connection-banner p {
-  font-size: 11px;
+  font-size: 15px;
   margin-top: 3px;
   line-height: 1.45;
 }
@@ -610,7 +636,7 @@ svg {
 }
 .connection-banner.disconnected {
   background: var(--red-soft);
-  border-color: color-mix(in srgb, var(--red) 15%, transparent);
+  border-color: color-mix(in srgb, var(--red) 55%, transparent);
   color: var(--red);
 }
 .mock-ribbon {
@@ -622,10 +648,10 @@ svg {
   border-bottom: 1px solid color-mix(in srgb, var(--amber) 15%, transparent);
   background: var(--amber-soft);
   color: var(--amber);
-  font-size: 10px;
+  font-size: 14px;
 }
 .mock-ribbon span {
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.7px;
   border: 1px solid color-mix(in srgb, var(--amber) 30%, transparent);
@@ -645,14 +671,14 @@ svg {
   overscroll-behavior: contain;
 }
 .welcome {
-  width: min(100% - 88px, 750px);
+  width: min(100% - 72px, 880px);
   margin: 55px auto 35px;
 }
 .welcome-kicker {
   display: flex;
   align-items: center;
   gap: 13px;
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 500;
   color: var(--muted);
 }
@@ -679,10 +705,10 @@ svg {
   color: var(--accent);
 }
 .welcome-description {
-  font-size: 12px;
+  font-size: 16px;
   color: var(--muted);
   line-height: 1.8;
-  max-width: 520px;
+  max-width: 650px;
   margin-top: 18px;
 }
 .welcome-trust {
@@ -693,7 +719,7 @@ svg {
   color: var(--text);
 }
 .welcome-trust span {
-  font-size: 10px;
+  font-size: 14px;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -712,12 +738,12 @@ svg {
   align-items: center;
   text-align: left;
   gap: 11px;
-  min-height: 86px;
-  padding: 16px 18px;
+  min-height: 100px;
+  padding: 18px 20px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 10px;
-  box-shadow: 0 2px 4px #152c4903;
+  box-shadow: var(--shadow);
 }
 .suggestion-card:hover {
   border-color: color-mix(in srgb, var(--accent) 45%, transparent);
@@ -727,19 +753,19 @@ svg {
   color: var(--accent);
   background: var(--surface-alt);
   border-radius: 8px;
-  width: 35px;
-  height: 35px;
+  width: 42px;
+  height: 42px;
   display: grid;
   place-items: center;
 }
 .suggestion-card strong {
-  font-size: 12px;
+  font-size: 16px;
   color: var(--heading);
   font-weight: 600;
   display: block;
 }
 .suggestion-card small {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--muted);
   display: block;
   margin-top: 7px;
@@ -762,18 +788,18 @@ svg {
 }
 .welcome-workflow strong {
   font-weight: 500;
-  font-size: 11px;
+  font-size: 15px;
   color: var(--text);
 }
 .welcome-workflow p {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--muted);
   margin: 9px 0 11px 25px;
   line-height: 1.6;
 }
 .welcome-workflow button {
   margin-left: 25px;
-  font-size: 10px;
+  font-size: 14px;
 }
 .welcome-config {
   padding: 15px 17px;
@@ -781,11 +807,11 @@ svg {
   background: var(--surface);
   border-radius: 9px;
   margin-top: 24px;
-  font-size: 11px;
+  font-size: 15px;
 }
 .welcome-config strong {
   color: var(--heading);
-  font-size: 12px;
+  font-size: 16px;
 }
 .welcome-config p {
   color: var(--muted);
@@ -794,7 +820,7 @@ svg {
 }
 .composer-area {
   padding: 12px 0 19px;
-  width: min(100% - 88px, 800px);
+  width: min(100% - 72px, 1040px);
   margin: 0 auto;
   position: relative;
 }
@@ -804,7 +830,7 @@ svg {
   align-items: center;
   margin-bottom: 10px;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   gap: 10px;
 }
 .workspace-capabilities > div {
@@ -823,27 +849,27 @@ svg {
 }
 .composer {
   background: var(--surface);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 12px;
-  box-shadow: 0 4px 20px #172e4c06;
-  padding: 14px 16px 10px;
+  box-shadow: var(--shadow);
+  padding: 18px 20px 14px;
 }
 .composer:focus-within {
-  border-color: #82a9d3;
-  box-shadow: 0 0 0 3px #649cdf0b;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent);
 }
 .composer textarea {
   display: block;
   width: 100%;
   resize: none;
   max-height: 160px;
-  min-height: 47px;
+  min-height: 58px;
   padding: 0;
   outline: none;
   border: 0;
   color: var(--text);
   background: none;
-  font-size: 12px;
+  font-size: 17px;
   line-height: 1.7;
 }
 .composer textarea:focus-visible {
@@ -862,7 +888,7 @@ svg {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 9px;
+  font-size: 13px;
   color: var(--muted);
 }
 .company-mini {
@@ -870,7 +896,7 @@ svg {
   border: 1px solid var(--border);
   background: var(--surface-alt);
   border-radius: 4px;
-  font-size: 8px;
+  font-size: 12px;
   color: var(--text);
   font-weight: 600;
 }
@@ -881,9 +907,9 @@ svg {
 }
 .send-button {
   background: var(--accent);
-  color: var(--surface);
-  width: 32px;
-  height: 32px;
+  color: var(--accent-contrast);
+  width: 44px;
+  height: 44px;
   display: grid;
   place-items: center;
   border-radius: 8px;
@@ -906,7 +932,7 @@ svg {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 8px;
+  font-size: 12px;
   color: var(--muted);
   margin-top: 10px;
 }
@@ -915,7 +941,7 @@ svg {
   align-items: center;
   gap: 12px;
   padding: 5px 0 17px;
-  font-size: 12px;
+  font-size: 16px;
   color: var(--text);
 }
 .recording-preview > span:last-child {
@@ -940,7 +966,7 @@ svg {
   align-items: center;
   gap: 6px;
   padding: 7px 9px;
-  font-size: 10px;
+  font-size: 14px;
 }
 .speech-controls,
 .generation-elsewhere {
@@ -948,7 +974,7 @@ svg {
   gap: 8px;
   align-items: center;
   color: var(--accent);
-  font-size: 11px;
+  font-size: 15px;
   margin-bottom: 8px;
 }
 .speech-controls {
@@ -963,34 +989,66 @@ svg {
   position: absolute;
   top: -25px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 15px;
 }
 .messages {
-  width: min(100% - 88px, 800px);
+  width: min(100% - 72px, 1040px);
   margin: 0 auto;
   padding: 28px 0 18px;
 }
 .message {
   display: flex;
   align-items: flex-start;
-  gap: 13px;
-  padding: 23px 0;
+  gap: 14px;
+  padding: 20px 0;
 }
-.message + .message {
-  border-top: 1px solid var(--border);
+.user-message {
+  flex-direction: row-reverse;
+}
+.user-message .message-body {
+  flex: 0 1 auto;
+  max-width: 78%;
+}
+.user-message .message-author,
+.user-message .message-actions {
+  justify-content: flex-end;
+}
+.message-bubble {
+  padding: 20px 22px;
+  border: 1px solid var(--border);
+  border-radius: 4px 16px 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+.user-message .message-bubble {
+  background: var(--user-bubble);
+  border-color: var(--user-border);
+  border-radius: 16px 4px 16px 16px;
+}
+.user-message .markdown,
+.user-message .markdown strong,
+.user-message .markdown h1,
+.user-message .markdown h2,
+.user-message .markdown h3,
+.user-message .markdown h4 {
+  color: var(--user-text);
 }
 .message-avatar {
   flex-shrink: 0;
-  width: 31px;
-  height: 31px;
+  width: 40px;
+  height: 40px;
   display: grid;
   place-items: center;
   background: var(--accent-soft);
   color: var(--accent);
   border: 1px solid var(--border);
   border-radius: 8px;
-  font-size: 9px;
-  font-weight: 500;
+  font-size: 13px;
+  font-weight: 600;
+}
+.message-avatar svg {
+  width: 22px;
+  height: 22px;
 }
 .assistant-message .message-avatar {
   background: #152c49;
@@ -1005,28 +1063,28 @@ svg {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 0 14px;
+  padding: 5px 0 10px;
   flex-wrap: wrap;
 }
 .message-author strong {
   color: var(--heading);
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 600;
 }
 .message-author > span {
-  font-size: 8px;
+  font-size: 12px;
   color: var(--muted);
 }
 .message-author .message-model {
   margin-left: auto;
-  font-size: 8px;
+  font-size: 12px;
   border: 1px solid var(--border);
   padding: 2px 5px;
   border-radius: 4px;
 }
 .markdown {
-  font-size: 13px;
-  line-height: 1.85;
+  font-size: 18px;
+  line-height: 1.75;
   color: var(--text);
   overflow-wrap: anywhere;
 }
@@ -1046,7 +1104,7 @@ svg {
 .markdown h4 {
   color: var(--heading);
   margin: 18px 0 8px;
-  font-size: 15px;
+  font-size: 20px;
   font-weight: 600;
 }
 .markdown ul,
@@ -1075,10 +1133,10 @@ svg {
   border-radius: 8px;
   background: var(--surface-alt);
   overflow-x: auto;
-  font-size: 11px;
+  font-size: 15px;
 }
 .markdown code {
-  font-size: 11px;
+  font-size: 15px;
   background: var(--surface-alt);
   padding: 2px 4px;
   border-radius: 4px;
@@ -1103,7 +1161,7 @@ svg {
 .markdown table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 11px;
+  font-size: 15px;
   white-space: nowrap;
 }
 .markdown th {
@@ -1131,16 +1189,17 @@ svg {
 .message-actions {
   display: flex;
   align-items: center;
-  gap: 3px;
-  margin-top: 14px;
+  gap: 5px;
+  margin-top: 10px;
+  flex-wrap: wrap;
 }
 .message-actions .icon-button {
-  width: 27px;
-  height: 25px;
+  width: 36px;
+  height: 36px;
 }
 .message-actions .text-button {
   margin-left: 7px;
-  font-size: 10px;
+  font-size: 14px;
 }
 .action-separator {
   height: 12px;
@@ -1150,26 +1209,26 @@ svg {
 }
 .message-error {
   background: var(--red-soft);
-  border: 1px solid color-mix(in srgb, var(--red) 15%, transparent);
+  border: 1px solid color-mix(in srgb, var(--red) 55%, transparent);
   border-radius: 8px;
   color: var(--red);
   display: flex;
   gap: 10px;
   padding: 14px;
-  font-size: 12px;
+  font-size: 16px;
 }
 .message-error p {
-  font-size: 11px;
+  font-size: 15px;
   line-height: 1.7;
   margin: 5px 0;
 }
 .message-error small {
-  font-size: 9px;
+  font-size: 13px;
 }
 .tool-activity {
-  margin: 0 0 15px 44px;
+  margin: 0 0 15px 54px;
   color: var(--muted);
-  font-size: 11px;
+  font-size: 15px;
 }
 .evidence-preview {
   margin-top: 18px;
@@ -1183,7 +1242,7 @@ svg {
   align-items: center;
   gap: 6px;
   padding: 10px 13px;
-  font-size: 10px;
+  font-size: 14px;
   color: var(--accent);
   background: var(--surface-alt);
   border-bottom: 1px solid var(--border);
@@ -1192,7 +1251,7 @@ svg {
 .evidence-preview-label > span {
   margin-left: auto;
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   font-weight: 400;
 }
 .invoice-card {
@@ -1223,12 +1282,12 @@ svg {
 }
 .invoice-info strong {
   color: var(--heading);
-  font-size: 11px;
+  font-size: 15px;
   display: block;
 }
 .invoice-info > span {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   display: block;
   margin-top: 5px;
 }
@@ -1239,17 +1298,17 @@ svg {
 .invoice-amount strong {
   color: var(--heading);
   display: block;
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
 }
 .invoice-amount span {
-  font-size: 9px;
+  font-size: 13px;
   display: block;
   margin-top: 4px;
 }
 .evidence-view {
   padding: 9px 13px;
-  font-size: 10px;
+  font-size: 14px;
 }
 .action-card {
   margin-top: 17px;
@@ -1259,7 +1318,8 @@ svg {
   background: var(--surface);
 }
 .action-card.pending {
-  border-color: color-mix(in srgb, var(--accent) 30%, transparent);
+  border-color: var(--accent);
+  box-shadow: var(--shadow);
 }
 .action-heading {
   display: flex;
@@ -1279,19 +1339,19 @@ svg {
   display: block;
   color: var(--accent);
   text-transform: uppercase;
-  font-size: 8px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.8px;
   margin: 2px 0 6px;
 }
 .action-heading h3 {
-  font-size: 13px;
+  font-size: 17px;
   color: var(--heading);
   font-weight: 600;
   line-height: 1.5;
 }
 .risk-label {
-  font-size: 8px;
+  font-size: 12px;
   white-space: nowrap;
   margin-left: auto;
   background: var(--amber-soft);
@@ -1312,7 +1372,7 @@ svg {
   padding: 12px;
   border-radius: 6px;
   background: var(--surface-alt);
-  font-size: 10px;
+  font-size: 14px;
 }
 .action-fields > div {
   display: flex;
@@ -1336,7 +1396,7 @@ svg {
   align-items: flex-start;
   gap: 7px;
   color: var(--amber);
-  font-size: 10px;
+  font-size: 14px;
   line-height: 1.6;
 }
 .action-impact span {
@@ -1347,25 +1407,27 @@ svg {
   display: flex;
   gap: 9px;
   margin: 15px 0 11px;
+  flex-wrap: wrap;
+  align-items: center;
 }
 .action-controls button {
-  font-size: 11px;
-  min-height: 33px;
-  padding: 8px 12px;
+  font-size: 15px;
+  min-height: 44px;
+  padding: 10px 16px;
 }
 .action-card > p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 15px;
   margin: 12px 0;
   line-height: 1.7;
 }
 .action-card > small {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 13px;
   line-height: 1.6;
 }
 .action-card > .action-result {
-  font-size: 10px;
+  font-size: 14px;
   margin-bottom: 0;
 }
 .dialog-overlay {
@@ -1402,13 +1464,13 @@ svg {
 }
 .dialog-header h2 {
   color: var(--heading);
-  font-size: 17px;
+  font-size: 22px;
   font-weight: 600;
   letter-spacing: -0.3px;
 }
 .dialog-header p {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 15px;
   margin-top: 8px;
   line-height: 1.6;
 }
@@ -1429,18 +1491,18 @@ form .dialog-actions {
 }
 input:not([type='range']):not([type='search']),
 select {
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: 7px;
   padding: 10px 12px;
   width: 100%;
   background: var(--surface);
   color: var(--text);
-  font-size: 12px;
+  font-size: 16px;
 }
 .field-label {
   display: block;
   color: var(--text);
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 600;
   margin: 15px 0 8px;
 }
@@ -1466,7 +1528,7 @@ select {
   align-items: center;
   width: 100%;
   gap: 9px;
-  font-size: 11px;
+  font-size: 15px;
   color: var(--muted);
   border-radius: 6px;
   background: transparent;
@@ -1489,19 +1551,19 @@ select {
   padding: 27px;
 }
 .settings-body h3 {
-  font-size: 15px;
+  font-size: 20px;
   color: var(--heading);
   font-weight: 600;
   margin-bottom: 10px;
 }
 .settings-body h4 {
   color: var(--heading);
-  font-size: 12px;
+  font-size: 16px;
   font-weight: 600;
   margin: 25px 0 13px;
 }
 .settings-body .muted {
-  font-size: 11px;
+  font-size: 15px;
 }
 .theme-options {
   display: flex;
@@ -1518,7 +1580,7 @@ select {
   border-radius: 8px;
   flex: 1;
   padding: 19px;
-  font-size: 11px;
+  font-size: 15px;
 }
 .theme-options button.selected {
   border-color: var(--accent);
@@ -1527,7 +1589,7 @@ select {
 }
 .setting-note {
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
   line-height: 1.75;
   margin-top: 28px;
 }
@@ -1541,12 +1603,12 @@ select {
 }
 .setting-row strong {
   display: block;
-  font-size: 11px;
+  font-size: 15px;
   font-weight: 600;
 }
 .setting-row div > span {
   display: block;
-  font-size: 10px;
+  font-size: 14px;
   color: var(--muted);
   line-height: 1.6;
   margin-top: 5px;
@@ -1584,7 +1646,7 @@ input[type='range'] {
   background: var(--accent-soft);
   border-radius: 7px;
   color: var(--accent);
-  font-size: 11px;
+  font-size: 15px;
   line-height: 1.7;
 }
 .settings-callout.warning {
@@ -1609,7 +1671,7 @@ input[type='range'] {
   gap: 15px;
   padding: 11px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 10px;
+  font-size: 14px;
 }
 .settings-diagnostics dt {
   color: var(--muted);
@@ -1625,7 +1687,7 @@ input[type='range'] {
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--border);
-  font-size: 10px;
+  font-size: 14px;
 }
 .capability-list strong {
   font-weight: 500;
@@ -1652,12 +1714,12 @@ input[type='range'] {
 }
 .model-card strong {
   display: block;
-  font-size: 13px;
+  font-size: 17px;
 }
 .model-card span {
   display: block;
   color: var(--muted);
-  font-size: 10px;
+  font-size: 14px;
   margin-top: 7px;
 }
 .audit-empty {
@@ -1666,7 +1728,7 @@ input[type='range'] {
   flex-direction: column;
   color: var(--muted);
   padding: 60px 0;
-  font-size: 11px;
+  font-size: 15px;
 }
 .audit-empty strong {
   color: var(--text);
@@ -1684,18 +1746,18 @@ input[type='range'] {
   display: flex;
   justify-content: space-between;
   gap: 10px;
-  font-size: 11px;
+  font-size: 15px;
 }
 .audit-list article strong {
   font-weight: 500;
   color: var(--heading);
 }
 .audit-status {
-  font-size: 9px;
+  font-size: 13px;
   color: var(--muted);
 }
 .audit-list p {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--muted);
   margin: 7px 0;
 }
@@ -1703,7 +1765,7 @@ input[type='range'] {
   display: flex;
   align-items: center;
   gap: 4px;
-  font-size: 9px;
+  font-size: 13px;
   color: var(--muted);
 }
 .evidence-drawer {
@@ -1724,7 +1786,7 @@ input[type='range'] {
   align-items: center;
   gap: 9px;
   color: var(--green);
-  font-size: 11px;
+  font-size: 15px;
   padding: 18px 25px;
   border-bottom: 1px solid var(--border);
   background: var(--green-soft);
@@ -1743,7 +1805,7 @@ input[type='range'] {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 12px;
+  font-size: 16px;
   color: var(--heading);
   font-weight: 600;
 }
@@ -1759,7 +1821,7 @@ input[type='range'] {
   gap: 15px;
   padding: 8px 0;
   border-bottom: 1px solid var(--border);
-  font-size: 10px;
+  font-size: 14px;
 }
 .evidence-record dt {
   color: var(--muted);
@@ -1772,12 +1834,12 @@ input[type='range'] {
   overflow-wrap: anywhere;
 }
 .evidence-record summary {
-  font-size: 10px;
+  font-size: 14px;
   color: var(--accent);
   cursor: pointer;
 }
 .evidence-record pre {
-  font-size: 9px;
+  font-size: 13px;
   overflow-x: auto;
   padding: 12px;
   border-radius: 5px;
@@ -1797,7 +1859,7 @@ input[type='range'] {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 11px;
+  font-size: 15px;
   color: var(--text);
   padding: 9px 10px;
   outline: none;
@@ -1830,7 +1892,7 @@ input[type='range'] {
   border-radius: 9px;
   box-shadow: 0 6px 30px #0002;
   z-index: 60;
-  font-size: 12px;
+  font-size: 16px;
   color: var(--text);
   animation: fade-in 0.2s;
 }
@@ -1854,10 +1916,10 @@ input[type='range'] {
   margin: 24px auto;
   padding: 20px;
   width: min(100% - 60px, 750px);
-  font-size: 12px;
+  font-size: 16px;
 }
 .workspace-error p {
-  font-size: 11px;
+  font-size: 15px;
   margin: 10px 0;
   line-height: 1.7;
 }
@@ -1898,12 +1960,12 @@ input[type='range'] {
   text-align: center;
 }
 .fatal-error h1 {
-  font-size: 22px;
+  font-size: 28px;
   color: var(--heading);
 }
 .fatal-error p {
   color: var(--muted);
-  font-size: 13px;
+  font-size: 17px;
   line-height: 1.8;
 }
 .mobile-menu,
@@ -1959,7 +2021,7 @@ input[type='range'] {
 }
 @media (max-width: 1150px) {
   .sidebar {
-    width: 248px;
+    width: 280px;
     padding-left: 13px;
     padding-right: 13px;
   }
@@ -1982,14 +2044,14 @@ input[type='range'] {
     gap: 9px;
   }
   .suggestion-card small {
-    font-size: 9px;
+    font-size: 13px;
   }
 }
 @media (max-width: 900px) {
   .sidebar {
     position: fixed;
     inset: 0 auto 0 0;
-    width: 274px;
+    width: min(304px, calc(100vw - 32px));
     z-index: 32;
     transform: translateX(-100%);
     transition: transform 0.2s ease;
@@ -2016,7 +2078,7 @@ input[type='range'] {
     padding-right: 0;
   }
   .brand strong {
-    font-size: 14px;
+    font-size: 18px;
   }
   .header-icon {
     display: none;
@@ -2035,8 +2097,8 @@ input[type='range'] {
     max-width: 720px;
   }
   .topbar {
-    height: 71px;
-    min-height: 71px;
+    height: 80px;
+    min-height: 80px;
   }
 }
 @media (max-width: 640px) {
@@ -2045,7 +2107,7 @@ input[type='range'] {
   }
   .topbar-title h2 {
     max-width: 170px;
-    font-size: 12px;
+    font-size: 16px;
   }
   .header-breadcrumb {
     display: none;
@@ -2062,11 +2124,11 @@ input[type='range'] {
     gap: 5px;
   }
   .connection-label {
-    font-size: 9px;
+    font-size: 13px;
   }
   .connection-label strong {
     display: block;
-    font-size: 8px;
+    font-size: 12px;
     padding-left: 0;
     margin-top: 2px;
   }
@@ -2082,14 +2144,14 @@ input[type='range'] {
     font-size: 32px;
   }
   .welcome-kicker {
-    font-size: 10px;
+    font-size: 14px;
   }
   .welcome-symbol {
     width: 40px;
     height: 40px;
   }
   .welcome-description {
-    font-size: 11px;
+    font-size: 15px;
   }
   .welcome-trust {
     gap: 15px;
@@ -2118,7 +2180,7 @@ input[type='range'] {
     top: 20px;
   }
   .suggestion-card strong {
-    font-size: 11px;
+    font-size: 15px;
   }
   .suggestion-card small {
     line-height: 1.6;
@@ -2140,7 +2202,7 @@ input[type='range'] {
     display: none;
   }
   .workspace-capabilities {
-    font-size: 8px;
+    font-size: 12px;
   }
   .workspace-capabilities > div {
     gap: 8px;
@@ -2152,17 +2214,23 @@ input[type='range'] {
     padding: 12px;
   }
   .composer textarea {
-    font-size: 12px;
+    font-size: 16px;
   }
   .composer-context {
-    font-size: 8px;
+    font-size: 12px;
   }
   .message {
     gap: 9px;
   }
+  .user-message .message-body {
+    max-width: calc(100% - 43px);
+  }
+  .message-bubble {
+    padding: 15px;
+  }
   .message-avatar {
-    width: 26px;
-    height: 26px;
+    width: 34px;
+    height: 34px;
   }
   .message-author {
     gap: 8px;
@@ -2172,7 +2240,7 @@ input[type='range'] {
     display: none;
   }
   .markdown {
-    font-size: 12px;
+    font-size: 17px;
   }
   .invoice-card {
     padding: 10px;
@@ -2182,16 +2250,16 @@ input[type='range'] {
     display: none;
   }
   .invoice-info strong {
-    font-size: 10px;
+    font-size: 14px;
   }
   .invoice-info > span {
-    font-size: 8px;
+    font-size: 12px;
   }
   .invoice-amount strong {
-    font-size: 10px;
+    font-size: 14px;
   }
   .invoice-amount span {
-    font-size: 8px;
+    font-size: 12px;
   }
   .action-card {
     padding: 13px;
@@ -2201,7 +2269,15 @@ input[type='range'] {
     flex-wrap: wrap;
   }
   .action-heading h3 {
-    font-size: 12px;
+    font-size: 16px;
+  }
+  .action-fields > div {
+    flex-direction: column;
+    gap: 4px;
+  }
+  .action-fields dd {
+    max-width: 100%;
+    text-align: left;
   }
   .risk-label {
     margin-left: 43px;
@@ -2220,10 +2296,10 @@ input[type='range'] {
     margin-left: 27px;
   }
   .connection-banner p {
-    font-size: 10px;
+    font-size: 14px;
   }
   .mock-ribbon {
-    font-size: 8px;
+    font-size: 12px;
     text-align: left;
     padding: 7px 14px;
   }
@@ -2253,7 +2329,7 @@ input[type='range'] {
     flex-shrink: 0;
     padding: 8px;
     margin: 0;
-    font-size: 10px;
+    font-size: 14px;
   }
   .settings-tabs button svg {
     display: none;
@@ -2263,10 +2339,10 @@ input[type='range'] {
     overflow: visible;
   }
   .dialog-header h2 {
-    font-size: 15px;
+    font-size: 20px;
   }
   .dialog-header p {
-    font-size: 10px;
+    font-size: 14px;
   }
   .theme-options button {
     padding: 16px 10px;
@@ -2277,7 +2353,7 @@ input[type='range'] {
   .toast {
     bottom: 16px;
     right: 16px;
-    font-size: 11px;
+    font-size: 15px;
   }
 }
 @media (prefers-reduced-motion: reduce) {
@@ -2296,7 +2372,7 @@ input[type='range'] {
   background: var(--green-soft);
   border-radius: 7px;
   color: var(--green);
-  font-size: 11px;
+  font-size: 15px;
   line-height: 1.7;
 }
 .action-verified-result p + p {
@@ -2304,13 +2380,13 @@ input[type='range'] {
 }
 .action-verified-result small {
   display: block;
-  font-size: 10px;
+  font-size: 14px;
   margin-top: 5px;
 }
 
 .connection-progress {
   display: block;
   margin-top: 5px;
-  font-size: 10px;
+  font-size: 14px;
   font-variant-numeric: tabular-nums;
 }
