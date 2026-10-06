@@ -2,7 +2,7 @@
 
 from contextvars import ContextVar
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal, InvalidOperation, localcontext
 
 from app.core.errors import AppError
 
@@ -13,6 +13,16 @@ from .metadata import norm
 
 
 WRITE_ATTEMPTED = ContextVar("d365_write_attempted", default=False)
+PAYMENT_TYPES = {"payment", "custpayment", "customerpayment"}
+INVOICE_TYPES = {
+    "invoice",
+    "custinvoice",
+    "customerinvoice",
+    "freetextinvoice",
+    "sales",
+    "cust",
+    "project",
+}
 
 
 def decimal_string(value):
@@ -140,9 +150,9 @@ class LiveD365Provider:
         candidates = await self.rows(info, company, top=2000)
         needle = query.casefold()
         matches = [
-            row for row in candidates
-            if needle in str(row.get(account, "")).casefold()
-            or needle in str(row.get(name, "")).casefold()
+            row
+            for row in candidates
+            if needle in str(row.get(account, "")).casefold() or needle in str(row.get(name, "")).casefold()
         ][:50]
         return [self.normalize_customer(info, row) for row in matches]
 
@@ -179,6 +189,8 @@ class LiveD365Provider:
         return self.info(entity)
 
     def normalize_transaction(self, info, row, is_open=True):
+        if info.balance_strategy() == "derived_custtrans":
+            return self.normalize_custtrans(info, row)
         amount_field, remaining_field = info.resolve("amount"), info.resolve("remaining")
         original = row.get(amount_field) if amount_field else None
         if is_open and amount_field == remaining_field:
@@ -200,6 +212,49 @@ class LiveD365Provider:
             "voucher": self.value(info, row, "voucher", required=False),
             "source_entity": info.name,
             "retrieved_at": utcnow().isoformat(),
+        }
+
+    def normalize_custtrans(self, info, row):
+        # The exact standard BI entity exposes cumulative settlement in transaction currency.
+        # Missing or malformed settlement values never mean zero settlement.
+        original = Decimal(decimal_string(row.get("AmountCur")))
+        settled = Decimal(decimal_string(row.get("SettleAmountCur")))
+        with localcontext() as context:
+            context.prec = max(
+                context.prec,
+                max(original.adjusted(), settled.adjusted())
+                - min(original.as_tuple().exponent, settled.as_tuple().exponent)
+                + 2,
+            )
+            remaining = original - settled
+        invoice = str(self.value(info, row, "invoice", required=False) or "").strip()
+        raw_type = self.value(info, row, "type", required=False)
+        transaction_type = enum_member(raw_type).casefold() if raw_type not in (None, "") else None
+        numeric_type = isinstance(raw_type, (int, float, bool)) or (
+            transaction_type is not None and transaction_type.lstrip("+-").replace(".", "", 1).isdigit()
+        )
+        if numeric_type:
+            transaction_type = None
+        is_invoice = bool(invoice) and (not info.resolve("type") or transaction_type in INVOICE_TYPES)
+        due = date_string(self.value(info, row, "due", required=False))
+        if due in {"1900-01-01", "0001-01-01"}:
+            due = None
+        return {
+            "account": str(self.value(info, row, "account")),
+            "company": str(self.value(info, row, "company")).lower(),
+            "invoice_number": invoice,
+            "currency": str(self.value(info, row, "currency")),
+            "original_amount": str(original),
+            "remaining_amount": str(remaining),
+            "due_date": due,
+            "transaction_date": date_string(self.value(info, row, "date", required=False)),
+            "voucher": self.value(info, row, "voucher", required=False),
+            "source_entity": info.name,
+            "retrieved_at": utcnow().isoformat(),
+            "transaction_type": transaction_type,
+            "is_invoice": is_invoice,
+            "balance_basis": "current",
+            "balance_strategy": "derived_custtrans",
         }
 
     async def open_transactions(self, account, company):
@@ -263,12 +318,25 @@ class LiveD365Provider:
             if self.registry.resolved.get(role):
                 info = self.transaction_info(role)
                 if info.resolve("invoice"):
+                    derived = info.balance_strategy() == "derived_custtrans"
                     rows = await self.rows(
-                        info, company, f"{self.field(info, 'invoice')} eq {odata_literal(identifier)}", top=2
+                        info,
+                        company,
+                        f"{self.field(info, 'invoice')} eq {odata_literal(identifier)}",
+                        top=None if derived else 2,
                     )
+                    if derived:
+                        normalized = [self.normalize_transaction(info, row) for row in rows]
+                        rows = [row for row in normalized if row["is_invoice"]]
                     if len(rows) == 1:
                         return {
-                            **self.normalize_transaction(info, rows[0], is_open=role == "open_transactions"),
+                            **(
+                                rows[0]
+                                if derived
+                                else self.normalize_transaction(
+                                    info, rows[0], is_open=role == "open_transactions"
+                                )
+                            ),
                             "is_posted": True,
                         }
                     if len(rows) > 1:
@@ -304,13 +372,16 @@ class LiveD365Provider:
         result = []
         for row in records:
             text = enum_member(row.get(type_field, "")).casefold()
-            if text in {"payment", "custpayment", "customerpayment"}:
+            if text in PAYMENT_TYPES:
+                amount = Decimal(decimal_string(self.value(info, row, "amount")))
+                derived = info.balance_strategy() == "derived_custtrans"
                 result.append(
                     {
                         "account": account,
                         "company": company,
                         "currency": str(self.value(info, row, "currency")),
-                        "amount": str(abs(Decimal(decimal_string(self.value(info, row, "amount"))))),
+                        "amount": str(-amount if derived else abs(amount)),
+                        **({"transaction_amount": str(amount), "is_reversal": amount > 0} if derived else {}),
                         "payment_date": date_string(self.value(info, row, "date", False)),
                         "voucher": self.value(info, row, "voucher", False),
                         "reference": self.value(info, row, "invoice", False),

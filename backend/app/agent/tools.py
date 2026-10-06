@@ -25,7 +25,10 @@ class AccountArguments(CompanyArguments):
 
 
 class DatedAccountArguments(AccountArguments):
-    as_of_date: date | None = None
+    as_of_date: date | None = Field(
+        default=None,
+        description="Due-date cutoff applied to currently open amounts; not a historical balance snapshot.",
+    )
 
 
 class InvoiceArguments(CompanyArguments):
@@ -40,7 +43,7 @@ READ_TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     "get_customer": (AccountArguments, "Retrieve a verified customer master record."),
     "get_customer_balance": (
         AccountArguments,
-        "Compute outstanding balance by currency from fresh ERP transactions.",
+        "Compute current net outstanding balance by currency, including signed open credits and payments.",
     ),
     "get_customer_open_transactions": (
         AccountArguments,
@@ -48,7 +51,8 @@ READ_TOOLS: dict[str, tuple[type[BaseModel], str]] = {
     ),
     "get_overdue_invoices": (
         DatedAccountArguments,
-        "Retrieve overdue open invoices at the specified date; backend computes overdue amounts.",
+        "Retrieve currently open invoices overdue at the specified due-date cutoff. "
+        "Amounts are current; this does not reconstruct historical balances or settlements.",
     ),
     "get_invoice_details": (
         InvoiceArguments,

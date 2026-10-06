@@ -58,6 +58,8 @@ For live use, edit **`backend/.env`**, restart the backend and omit `-Mock` / `-
 
 If D365 stays **Connecting**, keep Uvicorn running and inspect the status JSON from a second PowerShell window. A local status endpoint returning HTTP 200 confirms that the API answered; inspect the JSON stage and error summary. Authentication/customer checks have a 60-second budget, followed by a separate 180-second metadata budget: the default maximum is 240 seconds. Later reconnects can reuse a valid structural schema cache while checking ERP permissions afresh. Existing `.env` files need no new values for this fix; update and restart the backend. See [connection troubleshooting](guide.md#d365-stays-connecting-or-reconnecting) for safe checks and optional settings.
 
+For unavailable balances, the resolver now supports an existing `CustTransBiEntities` set with validated canonical settlement fields, deriving current remaining transaction-currency amounts as `AmountCur - SettleAmountCur`. Stop the dev servers, run `git pull --ff-only` and restart; `D365_OPEN_TRANSACTIONS_ENTITY=auto` needs no `.env` change. See [current balances and settlement fields](guide.md#current-balances-and-settlement-fields) for an explicit override and D365 reconciliation checks. Overdue date cutoffs apply to current remaining amounts; historical balances are not reconstructed. This adapter has not been reconciled against your live tenant.
+
 ## Checks
 
 ```powershell

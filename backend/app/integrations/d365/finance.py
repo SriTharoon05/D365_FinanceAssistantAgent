@@ -1,7 +1,7 @@
 """Deterministic finance calculations shared by live and mock adapters."""
 
 from datetime import date, datetime, timezone
-from decimal import Decimal
+from decimal import Decimal, localcontext
 
 from pydantic import ValidationError
 
@@ -23,7 +23,16 @@ def totals(rows, amount_key="remaining_amount"):
     result = {}
     for row in rows:
         currency = row["currency"]
-        result[currency] = result.get(currency, Decimal("0")) + Decimal(str(row[amount_key]))
+        previous = result.get(currency, Decimal("0"))
+        amount = Decimal(str(row[amount_key]))
+        with localcontext() as context:
+            context.prec = max(
+                context.prec,
+                max(previous.adjusted(), amount.adjusted())
+                - min(previous.as_tuple().exponent, amount.as_tuple().exponent)
+                + 2,
+            )
+            result[currency] = previous + amount
     return {key: str(value) for key, value in sorted(result.items())}
 
 
@@ -32,6 +41,15 @@ def evidence(row, kind, customer=None):
     fields["customer_name"] = (customer or {}).get("name") or row.get("name")
     fields["kind"] = kind
     return ToolEvidence(**fields).model_dump(mode="json")
+
+
+def open_evidence_kind(row):
+    transaction_type = str(row.get("transaction_type") or "").casefold()
+    if transaction_type in {"payment", "custpayment", "customerpayment"}:
+        return "payment"
+    if Decimal(str(row["remaining_amount"])) < 0:
+        return "credit"
+    return "invoice" if row.get("is_invoice", True) else "customer_transaction"
 
 
 class D365FinanceService:
@@ -70,35 +88,49 @@ class D365FinanceService:
             "customer": customer,
             "company": company,
             "transactions": rows,
-            "evidence": [evidence(row, "invoice", customer) for row in rows],
+            "evidence": [evidence(row, open_evidence_kind(row), customer) for row in rows],
+            "balance_basis": "current",
             "mock_mode": self.provider.mock,
         }
 
     async def get_customer_balance(self, account, company=None):
         result = await self.get_customer_open_transactions(account, company)
         result["totals_by_currency"] = totals(result["transactions"])
+        result["debit_totals_by_currency"] = totals(
+            [row for row in result["transactions"] if Decimal(row["remaining_amount"]) > 0]
+        )
+        result["credit_totals_by_currency"] = totals(
+            [row for row in result["transactions"] if Decimal(row["remaining_amount"]) < 0]
+        )
         result["retrieved_at"] = utcnow().isoformat()
         return result
 
     async def get_overdue_invoices(self, account, as_of_date=None, company=None):
         day = as_date(as_of_date)
         result = await self.get_customer_open_transactions(account, company)
+        eligible = [
+            row
+            for row in result["transactions"]
+            if row.get("is_invoice", True)
+            and Decimal(row["remaining_amount"]) > 0
+            and (not row.get("transaction_date") or date.fromisoformat(row["transaction_date"]) <= day)
+        ]
         rows = [
             dict(row, days_overdue=(day - date.fromisoformat(row["due_date"])).days)
-            for row in result["transactions"]
-            if row.get("due_date")
-            and date.fromisoformat(row["due_date"]) < day
-            and Decimal(row["remaining_amount"]) > 0
+            for row in eligible
+            if row.get("due_date") and date.fromisoformat(row["due_date"]) < day
         ]
-        unknown = sum(
-            1
-            for row in result["transactions"]
-            if not row.get("due_date") and Decimal(row["remaining_amount"]) > 0
-        )
+        unknown = sum(1 for row in eligible if not row.get("due_date"))
         return {
             "customer": result["customer"],
             "company": result["company"],
             "as_of_date": day.isoformat(),
+            "balance_basis": "current",
+            "date_basis": "current_open_amounts_due_date_cutoff",
+            "balance_note": (
+                "Remaining amounts reflect the current ERP snapshot. The selected date is a due-date "
+                "cutoff; this result does not reconstruct historical settlements or balances."
+            ),
             "invoices": rows,
             "totals_by_currency": totals(rows),
             "unknown_due_date_count": unknown,
@@ -145,6 +177,8 @@ class D365FinanceService:
             "overdue_invoices": overdue["invoices"],
             "overdue_totals_by_currency": overdue["totals_by_currency"],
             "as_of_date": overdue["as_of_date"],
+            "date_basis": overdue["date_basis"],
+            "balance_note": overdue["balance_note"],
             "unknown_due_date_count": overdue["unknown_due_date_count"],
             "payments": payments["payments"],
             "payment_history_diagnostic": payment_error,
@@ -163,12 +197,12 @@ class D365FinanceService:
             for row in invoices
         )
         body = (
-            f"Dear {customer['name']},\n\nOur records as of {overdue['as_of_date']} show the following overdue invoices:\n{details}\n\nPlease arrange payment or contact the finance team if you require clarification.\n\nRegards,\nFinance Team"
+            f"Dear {customer['name']},\n\nOur current records show the following open invoices with due dates before {overdue['as_of_date']}:\n{details}\n\nPlease arrange payment or contact the finance team if you require clarification.\n\nRegards,\nFinance Team"
             if invoices
-            else f"No overdue invoices with verified due dates were found for {customer['name']} as of {overdue['as_of_date']}. No payment reminder is needed."
+            else f"No currently open invoices with verified due dates before {overdue['as_of_date']} were found for {customer['name']}. No payment reminder is needed."
         )
         if not invoices and overdue["unknown_due_date_count"]:
-            body = f"No overdue invoices with verified due dates were found for {customer['name']} as of {overdue['as_of_date']}. {overdue['unknown_due_date_count']} open invoice(s) have no verified due date, so overdue status cannot be fully determined. Verify those dates in Dynamics 365 before drafting a reminder."
+            body = f"No currently open invoices with verified due dates before {overdue['as_of_date']} were found for {customer['name']}. {overdue['unknown_due_date_count']} open invoice(s) have no verified due date, so overdue status cannot be fully determined. Verify those dates in Dynamics 365 before drafting a reminder."
         return {
             "draft_only": True,
             "unknown_due_date_count": overdue["unknown_due_date_count"],
@@ -177,6 +211,9 @@ class D365FinanceService:
             "customer": customer,
             "evidence": overdue["evidence"],
             "mock_mode": self.provider.mock,
+            "balance_basis": overdue["balance_basis"],
+            "date_basis": overdue["date_basis"],
+            "balance_note": overdue["balance_note"],
         }
 
     def parse_mutation(self, action_type, payload):

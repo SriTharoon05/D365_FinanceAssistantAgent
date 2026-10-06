@@ -322,7 +322,19 @@ This explicitly bypasses the structural cache for the new connection attempt. A 
 
 Names differ across D365 environments. The resolver must not infer a current open balance solely from an original invoice amount. When a reliable remaining-balance source is unavailable, balance/overdue capabilities are unavailable and the app explains the limitation. Other verified features can remain available.
 
-Incomplete source fields remain explicit: an unavailable original amount is not replaced with a guessed value. An invoice without a verified due date cannot be classified as overdue; the backend reports the incomplete due-date coverage alongside the invoices it can classify. Remaining balances are read from the resolved open-transaction source rather than calculated as original invoice amounts minus guessed payments.
+### Current balances and settlement fields
+
+The resolver also supports existing public transaction sets such as `CustTransBiEntities` when metadata validates the required customer/company/currency fields and the canonical `AmountCur` and `SettleAmountCur` pair. For this source, Python `Decimal` calculates **current remaining transaction-currency amount = `AmountCur - SettleAmountCur`**. It preserves signed credit/payment amounts and groups totals separately by currency. `Closed` is a closed **date**, not a Boolean. This uses current ERP settlement amounts, never guessed payments or a mock fallback.
+
+Results identify this basis as `balance_basis="current"`; overdue results use `date_basis="current_open_amounts_due_date_cutoff"`. An `as_of_date` selects a due-date cutoff against amounts still open when retrieved. It does not reconstruct the balance at a past date; historical balances require settlement timelines and reversals. An unavailable original amount remains explicit. Without a verified due date, an invoice cannot be classified as overdue and incomplete due-date coverage is reported.
+
+Stop the dev servers, run `git pull --ff-only` from the repository root and restart with `.\scripts\dev.ps1` on Windows or `bash scripts/dev.sh` on macOS/Linux. If `D365_OPEN_TRANSACTIONS_ENTITY=auto`, no `.env` change is needed. If an existing override forces an unusable name, change it to `auto` or, after confirming the actual set and schema in diagnostics, use:
+
+```dotenv
+D365_OPEN_TRANSACTIONS_ENTITY=CustTransBiEntities
+```
+
+This override works only when that public set exists, has the supported canonical fields and permits reads for the mapped D365 user. Restart after changing `.env`. Before relying on live results, reconcile an unpaid invoice, a partially settled invoice, a fully settled invoice and a negative credit/payment transaction against D365 in the same company and currency; also check payment schedules if used. Schema discovery and automated tests do not establish live financial reconciliation.
 
 Inspect:
 
@@ -354,7 +366,7 @@ The following **manual live acceptance** requires real D365 and Azure credential
 1. Disable mock mode, reconnect and inspect open-transaction capability.
 2. Ask **“What is the outstanding balance for Asterion?”** Verify the resolved customer is `AST-001`, company `USMF`, and the underlying invoices are read from the live ERP.
 3. For the supplied snapshot, `FTI-00000022` had INR 35,000 remaining and `FTI-00000021` had INR 75,000 remaining, totaling INR 110,000. Those values are expectations for that snapshot only. If live records change, trust D365.
-4. Ask **“Which Asterion invoices are overdue as of 5 October 2026?”** In that snapshot, the first invoice was due 30 September 2026 and overdue; the second was due 15 October 2026 and not overdue.
+4. Ask **“Which Asterion invoices are overdue as of 5 October 2026?”** For the supplied snapshot, the first invoice was due 30 September 2026 and overdue; the second was due 15 October 2026 and not overdue. The date is a due-date cutoff for current open amounts, not a reconstruction of their historical remaining balances.
 5. Inspect evidence cards for invoice references, original versus remaining amount, company, currency and retrieval time.
 6. Test any live mutation only against an approved disposable test record, review confirmation and verify the result in D365. Do not use acceptance amounts as seed data or expected live application responses.
 
@@ -568,6 +580,8 @@ $Diagnostics | ConvertTo-Json -Depth 12
 ```
 
 Review `candidates`, `resolved_entities` and `messages` in the entity-diagnostics response, and `capabilities.diagnostics` in the status response. Discovery examines only the bounded top candidates rather than every public set, so a missing automatic selection needs inspection, not an invented entity name. Confirm a suitable set exists in your tenant's `$metadata` and exposes the required customer/company/currency/amount fields. Use the verified overrides `D365_CUSTOMER_TRANSACTIONS_ENTITY` and `D365_OPEN_TRANSACTIONS_ENTITY` in `backend/.env` when appropriate. A selected entity must support a safe read for the mapped D365 user. Do not use invoice original amount as a substitute for remaining/open balance. Restart the backend and reconnect after changing `.env`.
+
+If diagnostics expose `CustTransBiEntities` with canonical `AmountCur` and `SettleAmountCur`, update/restart to use the [settlement-field adapter](#current-balances-and-settlement-fields). Default `auto` can resolve it; a stale explicit override must be corrected. Inspect the resolved schema and reconcile the resulting current amounts in D365 before treating them as verified live balances.
 
 ### Rate limits or D365 5xx
 

@@ -4,6 +4,7 @@ import pytest
 
 from app.core.config import Settings
 from app.core.errors import AppError
+from app.integrations.d365.finance import totals
 from app.integrations.d365.runtime import D365Runtime
 
 
@@ -196,3 +197,76 @@ async def test_unknown_due_date_reminder_does_not_claim_no_payment_needed(runtim
     assert reminder["unknown_due_date_count"] == 2
     assert "cannot be fully determined" in reminder["body"]
     assert "No payment reminder is needed" not in reminder["body"]
+
+
+@pytest.mark.asyncio
+async def test_net_balance_preserves_open_credits_and_payment_reversals(runtime):
+    base = runtime.provider.invoices["FTI-00000022"]
+    records = {
+        "UNAPPLIED": {"remaining_amount": "-5000", "transaction_type": "payment", "is_invoice": False},
+        "REVERSAL": {"remaining_amount": "2500", "transaction_type": "payment", "is_invoice": False},
+        "CREDIT": {"remaining_amount": "-300", "transaction_type": "cust", "is_invoice": True},
+    }
+    for key, fields in records.items():
+        runtime.provider.invoices[key] = {
+            **base,
+            **fields,
+            "invoice_number": key if fields["is_invoice"] else "",
+            "voucher": key,
+        }
+    balance = await runtime.finance.get_customer_balance("AST-001")
+    assert balance["totals_by_currency"] == {"INR": "107200"}
+    assert balance["debit_totals_by_currency"] == {"INR": "112500"}
+    assert balance["credit_totals_by_currency"] == {"INR": "-5300"}
+    kinds = {item["voucher"]: item["kind"] for item in balance["evidence"]}
+    assert kinds["UNAPPLIED"] == "payment"
+    assert kinds["REVERSAL"] == "payment"
+    assert kinds["CREDIT"] == "credit"
+    overdue = await runtime.finance.get_overdue_invoices("AST-001", "2026-10-05")
+    assert overdue["totals_by_currency"] == {"INR": "35000"}
+    assert [row["invoice_number"] for row in overdue["invoices"]] == ["FTI-00000022"]
+
+
+@pytest.mark.asyncio
+async def test_overdue_cutoff_excludes_noninvoice_and_later_transactions(runtime):
+    base = runtime.provider.invoices["FTI-00000022"]
+    runtime.provider.invoices["UNKNOWN-PAYMENT"] = {
+        **base,
+        "invoice_number": "",
+        "is_invoice": False,
+        "remaining_amount": "400",
+        "due_date": None,
+    }
+    runtime.provider.invoices["UNKNOWN-INVOICE"] = {
+        **base,
+        "invoice_number": "UNKNOWN-INVOICE",
+        "is_invoice": True,
+        "remaining_amount": "500",
+        "due_date": None,
+    }
+    runtime.provider.invoices["LATER"] = {
+        **base,
+        "invoice_number": "LATER",
+        "is_invoice": True,
+        "remaining_amount": "900",
+        "transaction_date": "2026-10-07",
+    }
+    overdue = await runtime.finance.get_overdue_invoices("AST-001", "2026-10-05")
+    assert overdue["totals_by_currency"] == {"INR": "35000"}
+    assert overdue["unknown_due_date_count"] == 1
+    assert overdue["balance_basis"] == "current"
+    assert overdue["date_basis"] == "current_open_amounts_due_date_cutoff"
+    assert "does not reconstruct historical" in overdue["balance_note"]
+    reminder = await runtime.finance.draft_collection_reminder("AST-001", "2026-10-05")
+    assert "Our current records" in reminder["body"]
+    assert "due dates before 2026-10-05" in reminder["body"]
+    assert "Our records as of" not in reminder["body"]
+
+
+def test_currency_totals_preserve_cents_beyond_default_decimal_precision():
+    rows = [
+        {"currency": "USD", "remaining_amount": "100000000000000000000000000.01"},
+        {"currency": "USD", "remaining_amount": "0.02"},
+        {"currency": "EUR", "remaining_amount": "-0.30"},
+    ]
+    assert totals(rows) == {"EUR": "-0.30", "USD": "100000000000000000000000000.03"}

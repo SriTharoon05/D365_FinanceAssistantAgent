@@ -83,12 +83,33 @@ class EntityInfo:
     def actual(self, name):
         return next((key for key in self.fields if norm(key) == norm(name)), None)
 
+    def balance_strategy(self):
+        remaining = self.resolve("remaining")
+        if remaining and (norm(remaining) != "amountcur" or "open" in norm(self.name)):
+            return "direct"
+        if (
+            self.name == "CustTransBiEntities"
+            and self.fields.get("AmountCur") == "Edm.Decimal"
+            and self.fields.get("SettleAmountCur") == "Edm.Decimal"
+            and all(
+                self.fields.get(self.resolve(role)) == "Edm.String"
+                for role in ("company", "account", "currency")
+            )
+        ):
+            return "derived_custtrans"
+        return "unavailable"
+
     def diagnostic(self):
+        strategy = self.balance_strategy()
         return {
             "entity": self.name,
             "fields": sorted(self.fields),
             "keys": self.keys,
             "mapping": {role: value for role in FIELD_ALIASES if (value := self.resolve(role))},
+            "balance_strategy": strategy,
+            "remaining_amount_formula": "AmountCur - SettleAmountCur"
+            if strategy == "derived_custtrans"
+            else None,
         }
 
 
@@ -106,6 +127,11 @@ class D365CapabilityRegistry:
             "customer_transactions": self.resolved["customer_transactions"] is not None,
             "open_transactions": self.resolved["open_transactions"] is not None,
             "resolved_entities": self.resolved.copy(),
+            "open_transactions_strategy": (
+                self.entities[self.resolved["open_transactions"]].balance_strategy()
+                if self.resolved["open_transactions"] in self.entities
+                else None
+            ),
             "posting": False,
             "settlement": False,
             "diagnostics": self.messages.copy(),
@@ -359,7 +385,8 @@ class D365MetadataResolver:
         account, company, currency = (info.resolve(key) for key in ("account", "company", "currency"))
         if not all((account, company, currency)):
             return 0
-        if role == "open_transactions" and not info.resolve("remaining"):
+        strategy = info.balance_strategy()
+        if role == "open_transactions" and strategy == "unavailable":
             return 0
         if role == "customer_transactions" and (
             not info.resolve("amount")
@@ -376,13 +403,10 @@ class D365MetadataResolver:
         score += 6 if info.resolve("due") else 0
         score += 4 if info.resolve("date") else 0
         score += 4 if info.resolve("voucher") else 0
-        if role == "open_transactions":
+        if role == "open_transactions" and strategy == "direct":
             score += 30 if "open" in name else 0
             remaining = norm(info.resolve("remaining"))
             score += 20 if remaining not in {"amountcur", "balance"} else 0
-            # An ordinary transaction amount is not an outstanding amount.
-            if "open" not in name and remaining == "amountcur":
-                return 0
         elif "open" in name:
             score -= 25
         return score
@@ -425,7 +449,14 @@ class D365MetadataResolver:
             setting = getattr(self.settings, "d365_" + role + "_entity", "auto")
             ranked = sorted(
                 ((self.score(info, role), name) for name, info in self.registry.entities.items()),
-                key=lambda pair: (-pair[0], pair[1]),
+                key=lambda pair: (
+                    1
+                    if role == "open_transactions"
+                    and self.registry.entities[pair[1]].balance_strategy() == "derived_custtrans"
+                    else 0,
+                    -pair[0],
+                    pair[1],
+                ),
             )
             candidates = [
                 {"score": score, **self.registry.entities[name].diagnostic()}
