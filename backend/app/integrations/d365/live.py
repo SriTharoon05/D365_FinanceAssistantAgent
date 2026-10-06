@@ -128,8 +128,23 @@ class LiveD365Provider:
     async def search_customers(self, query, company):
         info = self.info(self.settings.d365_customers_entity)
         account, name = self.field(info, "account"), self.field(info, "name")
-        clause = f"contains({account},{odata_literal(query)}) or contains({name},{odata_literal(query)})"
-        return [self.normalize_customer(info, row) for row in await self.rows(info, company, clause, top=50)]
+
+        # Exact account match first (cheap, works reliably via `eq`).
+        exact = await self.rows(info, company, f"{account} eq {odata_literal(query)}", top=5)
+        if exact:
+            return [self.normalize_customer(info, row) for row in exact]
+
+        # Fallback: this tenant's OData layer cannot execute string functions
+        # (contains/startswith/substringof) on CustomersV3, so filter client-side
+        # over a bounded page instead of relying on server-side pattern matching.
+        candidates = await self.rows(info, company, top=2000)
+        needle = query.casefold()
+        matches = [
+            row for row in candidates
+            if needle in str(row.get(account, "")).casefold()
+            or needle in str(row.get(name, "")).casefold()
+        ][:50]
+        return [self.normalize_customer(info, row) for row in matches]
 
     async def customer_record(self, account, company):
         info = self.info(self.settings.d365_customers_entity)
