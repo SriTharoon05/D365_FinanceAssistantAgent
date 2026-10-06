@@ -81,8 +81,10 @@ describe('Finance Assistant application', () => {
       ...connectedStatus,
       status: 'connecting' as const,
       connection_stage: 'loading_metadata',
-      connection_elapsed_seconds: 42,
-      connection_timeout_seconds: 60,
+      connection_elapsed_seconds: 75,
+      connection_timeout_seconds: 240,
+      connection_phase_elapsed_seconds: 70,
+      connection_phase_timeout_seconds: 180,
       metadata_loaded: false,
       last_error_summary: null,
     };

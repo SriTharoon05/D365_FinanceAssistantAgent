@@ -241,8 +241,8 @@ def create_app(settings=None, runtime=None):
         return await request.app.state.runtime.check_health()
 
     @app.post("/api/integrations/d365/reconnect")
-    async def reconnect(request: Request, owner_id=Depends(owner)):
-        return await request.app.state.runtime.reconnect()
+    async def reconnect(request: Request, refresh_metadata: bool = False, owner_id=Depends(owner)):
+        return await request.app.state.runtime.reconnect(refresh_metadata=refresh_metadata)
 
     @app.get("/api/integrations/d365/diagnostics/entities")
     async def diagnostics(request: Request, owner_id=Depends(owner)):

@@ -20,6 +20,7 @@ STAGE_DESCRIPTIONS = {
     "authenticating": "authenticating with Microsoft Entra",
     "checking_customers": "checking customer data access",
     "loading_metadata": "downloading tenant metadata",
+    "loading_cached_metadata": "loading cached tenant metadata",
     "discovering_entities": "checking transaction entities",
 }
 
@@ -36,6 +37,9 @@ class D365Runtime:
         self._connection_stage = None
         self._connection_started_at = None
         self._connection_elapsed = 0.0
+        self._connection_phase_started_at = None
+        self._connection_phase_elapsed = 0.0
+        self._connection_phase_timeout = settings.d365_connection_timeout_seconds
         self._owns_client = http_client is None
         self.http = http_client or httpx.AsyncClient(
             timeout=getattr(settings, "d365_timeout_seconds", 30), follow_redirects=False
@@ -72,7 +76,7 @@ class D365Runtime:
     async def start(self):
         return await self.reconnect(initial=True)
 
-    async def reconnect(self, initial=False):
+    async def reconnect(self, initial=False, refresh_metadata=False):
         # Coalesce clicks/polls during an existing attempt instead of queuing another metadata scan.
         if self._connection_in_progress or self._lock.locked():
             return self.status()
@@ -80,6 +84,9 @@ class D365Runtime:
             self._connection_in_progress = True
             self._connection_started_at = time.monotonic()
             self._connection_elapsed = 0.0
+            self._connection_phase_started_at = self._connection_started_at
+            self._connection_phase_elapsed = 0.0
+            self._connection_phase_timeout = self.settings.d365_connection_timeout_seconds
             self._state = "connecting" if initial else "reconnecting"
             self._last_error = None
             error_code = None
@@ -88,15 +95,22 @@ class D365Runtime:
                     self._state = "connected"
                     self._last_success = utcnow().isoformat()
                 else:
-                    timeout = self.settings.d365_connection_timeout_seconds
-                    async with asyncio.timeout(timeout):
+                    # Keep authentication and customer access bounded independently of the
+                    # potentially large, cold D365 schema download.
+                    async with asyncio.timeout(self._connection_phase_timeout):
                         self._set_stage("authenticating")
                         await self.auth.get_token(force_refresh=True)
                         # Verify primary data access before optional metadata discovery.
                         self._set_stage("checking_customers")
                         await self.client.get(self.settings.d365_customers_entity, top=1)
+                    self._connection_phase_started_at = time.monotonic()
+                    self._connection_phase_timeout = self.settings.d365_metadata_timeout_seconds
+                    async with asyncio.timeout(self._connection_phase_timeout):
                         self._set_stage("loading_metadata")
-                        await self.metadata.load(on_stage=self._set_stage)
+                        if refresh_metadata:
+                            await self.metadata.load(on_stage=self._set_stage, force_refresh=True)
+                        else:
+                            await self.metadata.load(on_stage=self._set_stage)
                         self._state = (
                             "connected" if all(self.metadata.registry.resolved.values()) else "degraded"
                         )
@@ -108,7 +122,7 @@ class D365Runtime:
                 error_code = "D365_CONNECTION_TIMEOUT"
                 stage = STAGE_DESCRIPTIONS.get(self._connection_stage, "checking the connection")
                 self._failed(
-                    f"Dynamics 365 connection timed out after {self.settings.d365_connection_timeout_seconds:g} "
+                    f"Dynamics 365 connection timed out after {self._connection_phase_timeout:g} "
                     f"seconds while {stage}. Check network access and backend connection diagnostics, then reconnect."
                 )
             except AppError as exc:
@@ -130,12 +144,15 @@ class D365Runtime:
                 )
             finally:
                 self._connection_elapsed = time.monotonic() - self._connection_started_at
+                self._connection_phase_elapsed = time.monotonic() - self._connection_phase_started_at
                 self._connection_in_progress = False
                 logger.info(
                     "d365_connection_finished",
                     status=self._state,
                     stage=self._connection_stage,
                     elapsed_ms=round(self._connection_elapsed * 1000),
+                    phase_elapsed_ms=round(self._connection_phase_elapsed * 1000),
+                    phase_timeout_seconds=self._connection_phase_timeout,
                     error_code=error_code,
                 )
             return self.status()
@@ -205,6 +222,9 @@ class D365Runtime:
             "last_success_at": self.client.last_success_at or self._last_success,
             "last_error_summary": self._last_error,
             "metadata_loaded": self.settings.d365_mock_mode or self.metadata.registry.loaded,
+            "metadata_source": "mock"
+            if self.settings.d365_mock_mode
+            else getattr(self.metadata, "cache_source", None),
             "capabilities": capabilities,
             "latency_ms": self.client.latency_ms,
             "mock_mode": self.settings.d365_mock_mode,
@@ -215,13 +235,25 @@ class D365Runtime:
                 else self._connection_elapsed,
                 1,
             ),
-            "connection_timeout_seconds": self.settings.d365_connection_timeout_seconds,
+            "connection_timeout_seconds": (
+                self.settings.d365_connection_timeout_seconds + self.settings.d365_metadata_timeout_seconds
+            ),
+            "connection_phase_elapsed_seconds": round(
+                time.monotonic() - self._connection_phase_started_at
+                if self._connection_in_progress
+                else self._connection_phase_elapsed,
+                1,
+            ),
+            "connection_phase_timeout_seconds": self._connection_phase_timeout,
         }
 
     def diagnostics(self):
         return {
             "mock_mode": self.settings.d365_mock_mode,
             "metadata_loaded": self.settings.d365_mock_mode or self.metadata.registry.loaded,
+            "metadata_source": "mock"
+            if self.settings.d365_mock_mode
+            else getattr(self.metadata, "cache_source", None),
             "resolved_entities": self.status()["capabilities"]["resolved_entities"],
             "candidates": self.metadata.registry.candidates,
             "entities": [info.diagnostic() for _, info in sorted(self.metadata.registry.entities.items())],

@@ -70,14 +70,72 @@ describe('conversation history', () => {
 });
 
 describe('Dynamics 365 connection experience', () => {
+  it.each([
+    { phaseTimeout: 180, duration: '3 minutes' },
+    { phaseTimeout: 30, duration: '30 seconds' },
+  ])(
+    'explains a first metadata download using its configured $phaseTimeout-second budget',
+    ({ phaseTimeout, duration }) => {
+      render(
+        <ConnectionBanner
+          status={{
+            ...connectedStatus,
+            status: 'connecting',
+            connection_stage: 'loading_metadata',
+            connection_timeout_seconds: 60 + phaseTimeout,
+            connection_phase_timeout_seconds: phaseTimeout,
+            metadata_loaded: false,
+            last_error_summary: null,
+          }}
+          onReconnect={vi.fn()}
+          isReconnecting={false}
+        />,
+      );
+
+      const progress = screen.getByRole('status');
+      expect(progress).toHaveTextContent(/first/i);
+      expect(progress).toHaveTextContent(duration);
+      expect(progress).toHaveTextContent(`Overall limit ${60 + phaseTimeout}s`);
+      expect(screen.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+    },
+  );
+
+  it('describes a cached schema while retaining fresh authentication and data-access checks', () => {
+    render(
+      <ConnectionBanner
+        status={{
+          ...connectedStatus,
+          status: 'reconnecting',
+          connection_stage: 'loading_cached_metadata',
+          connection_elapsed_seconds: 5,
+          connection_phase_elapsed_seconds: 2,
+          connection_phase_timeout_seconds: 180,
+          connection_timeout_seconds: 240,
+          last_error_summary: null,
+        }}
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+
+    const progress = screen.getByRole('status');
+    expect(progress).toHaveTextContent(/cached/i);
+    expect(progress).toHaveTextContent(/authentication/i);
+    expect(progress).toHaveTextContent(/permissions/i);
+    expect(progress).toHaveTextContent(/fresh|current|this connection/i);
+    expect(screen.queryByRole('button', { name: 'Reconnect' })).not.toBeInTheDocument();
+  });
+
   it('shows metadata progress and a bounded time limit, then exposes the real timeout and reconnect action', async () => {
     const onReconnect = vi.fn();
     const loading = {
       ...connectedStatus,
       status: 'connecting' as const,
       connection_stage: 'loading_metadata',
-      connection_elapsed_seconds: 42,
-      connection_timeout_seconds: 60,
+      connection_elapsed_seconds: 75,
+      connection_timeout_seconds: 240,
+      connection_phase_elapsed_seconds: 70,
+      connection_phase_timeout_seconds: 180,
       metadata_loaded: false,
       last_error_summary: null,
     };
@@ -89,15 +147,18 @@ describe('Dynamics 365 connection experience', () => {
     );
 
     expect(screen.getByRole('status')).toHaveTextContent('Loading Dynamics 365 OData metadata.');
-    expect(screen.getByText('Elapsed 42s · Time limit 60s')).toBeVisible();
+    expect(
+      screen.getByText('Total elapsed 75s · Stage 70s / 180s · Overall limit 240s'),
+    ).toBeVisible();
     expect(screen.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
     const timeoutReason =
-      'The Dynamics 365 connection check timed out after 60 seconds during metadata loading.';
+      'The Dynamics 365 metadata download timed out after its 180-second stage budget.';
     const failed = {
       ...loading,
       status: 'disconnected' as const,
       connection_stage: 'failed',
-      connection_elapsed_seconds: 60,
+      connection_elapsed_seconds: 185,
+      connection_phase_elapsed_seconds: 180,
       last_error_summary: timeoutReason,
     };
     rerender(
@@ -114,7 +175,9 @@ describe('Dynamics 365 connection experience', () => {
     expect(
       screen.queryByRole('button', { name: 'Dynamics 365 connected. Open integration settings' }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByText('Elapsed 42s · Time limit 60s')).not.toBeInTheDocument();
+    expect(
+      screen.queryByText('Total elapsed 75s · Stage 70s / 180s · Overall limit 240s'),
+    ).not.toBeInTheDocument();
     const reconnect = screen.getByRole('button', { name: 'Reconnect' });
     expect(reconnect).toBeEnabled();
     await userEvent.click(reconnect);

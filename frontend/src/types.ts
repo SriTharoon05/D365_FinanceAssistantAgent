@@ -11,6 +11,8 @@ export interface IntegrationStatus {
   connection_stage?: string | null;
   connection_elapsed_seconds?: number | null;
   connection_timeout_seconds?: number | null;
+  connection_phase_timeout_seconds?: number | null;
+  connection_phase_elapsed_seconds?: number | null;
   mock_mode: boolean;
 }
 export interface Capabilities {

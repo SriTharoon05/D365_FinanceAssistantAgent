@@ -1,14 +1,27 @@
 """Namespace-independent metadata parsing and deterministic capability selection."""
 
 import asyncio
+import hashlib
+import json
+import math
+import os
 import re
+import stat
+import tempfile
+import threading
+import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from xml.etree import ElementTree
+
+import structlog
 
 from app.core.errors import AppError
 
+logger = structlog.get_logger(__name__)
 MAX_AUTO_PROBES = 3
 PROBE_TIMEOUT_SECONDS = 5.0
+MAX_INHERITANCE_DEPTH = 128
 SKIPPABLE_PROBE_ERRORS = {"D365_ENTITY_UNAVAILABLE", "D365_VALIDATION_ERROR", "D365_PERMISSION_ERROR"}
 
 
@@ -103,9 +116,161 @@ class D365MetadataResolver:
     def __init__(self, client, settings):
         self.client, self.settings = client, settings
         self.registry = D365CapabilityRegistry()
+        self.cache_source: str | None = None
+
+    @property
+    def max_metadata_bytes(self):
+        return self.settings.d365_metadata_max_mb * 1024**2
+
+    @property
+    def cache_path(self):
+        """Scope structural metadata to the endpoint and authenticated application."""
+        scope = json.dumps(
+            [
+                self.settings.d365_base_url.rstrip("/"),
+                self.settings.d365_tenant_id,
+                self.settings.d365_client_id,
+            ],
+            separators=(",", ":"),
+        )
+        digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+        database_path = self.settings.database_path()
+        data_path = database_path.parent if database_path is not None else Path("data")
+        return data_path / "metadata-cache" / f"v1-{digest}.xml"
+
+    def _read_cached_xml(self):
+        """Read only a current, privately owned, bounded regular cache file."""
+        if not self.settings.d365_metadata_cache_hours:
+            return None
+        try:
+            path = self.cache_path
+            before = path.lstat()
+            if not stat.S_ISREG(before.st_mode):
+                return None
+            descriptor = os.open(
+                path,
+                os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0),
+            )
+            with os.fdopen(descriptor, "rb") as cached:
+                info = os.fstat(cached.fileno())
+                getuid = getattr(os, "getuid", None)
+                now = time.time()
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or (before.st_dev, before.st_ino) != (info.st_dev, info.st_ino)
+                    or (getuid is not None and info.st_uid != getuid())
+                    or (getuid is not None and stat.S_IMODE(info.st_mode) != 0o600)
+                    or not math.isfinite(info.st_mtime)
+                    or info.st_mtime > now
+                    or now - info.st_mtime >= self.settings.d365_metadata_cache_hours * 3600
+                    or info.st_size > self.max_metadata_bytes
+                ):
+                    return None
+                body = cached.read(self.max_metadata_bytes + 1)
+            if len(body) > self.max_metadata_bytes:
+                return None
+            return body.decode("utf-8")
+        except (OSError, UnicodeError, ValueError):
+            return None
+
+    @staticmethod
+    def _discard_cache_file(temporary):
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    def _stage_cached_xml(self, xml, cancelled, state):
+        """A worker may stage XML, but only the active load may publish the cache."""
+        temporary = None
+        completed = False
+        try:
+            if cancelled.is_set():
+                return None
+            path = self.cache_path
+            path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            directory = path.parent.lstat()
+            getuid = getattr(os, "getuid", None)
+            if (
+                not stat.S_ISDIR(directory.st_mode)
+                or (getuid is not None and directory.st_uid != getuid())
+                or (getuid is not None and directory.st_mode & 0o022)
+            ):
+                raise OSError("Metadata cache directory is not private")
+            with tempfile.NamedTemporaryFile(
+                mode="wb", prefix=".metadata-", suffix=".tmp", dir=path.parent, delete=False
+            ) as cached:
+                temporary = Path(cached.name)
+                state["temporary"] = temporary
+                fchmod = getattr(os, "fchmod", None)
+                if fchmod is not None:
+                    fchmod(cached.fileno(), 0o600)
+                else:
+                    os.chmod(temporary, 0o600)
+                cached.write(xml.encode("utf-8"))
+                cached.flush()
+                os.fsync(cached.fileno())
+            if cancelled.is_set():
+                return None
+            completed = True
+            return temporary, path
+        except (OSError, UnicodeError, ValueError) as exc:
+            logger.warning("d365_metadata_cache_write_failed", error_type=type(exc).__name__)
+            return None
+        finally:
+            if not completed or cancelled.is_set():
+                self._discard_cache_file(temporary)
+
+    async def _write_cached_xml(self, xml):
+        """Atomic persistence is best effort and never stores probe records or tokens."""
+        if not self.settings.d365_metadata_cache_hours:
+            return
+        cancelled, state = threading.Event(), {"temporary": None}
+        worker = asyncio.create_task(asyncio.to_thread(self._stage_cached_xml, xml, cancelled, state))
+        try:
+            staged = await asyncio.shield(worker)
+        except asyncio.CancelledError:
+            cancelled.set()
+            self._discard_cache_file(state["temporary"])
+
+            def discard_result(task):
+                if task.cancelled():
+                    return
+                failure = task.exception()
+                if failure is not None:
+                    logger.warning("d365_metadata_cache_write_failed", error_type=type(failure).__name__)
+                    return
+                staged = task.result()
+                if staged is not None:
+                    self._discard_cache_file(staged[0])
+
+            worker.add_done_callback(discard_result)
+            raise
+        if staged is not None:
+            temporary, path = staged
+            try:
+                os.replace(temporary, path)
+            except OSError as exc:
+                logger.warning("d365_metadata_cache_write_failed", error_type=type(exc).__name__)
+            finally:
+                self._discard_cache_file(temporary)
 
     def parse(self, xml: str):
-        if len(xml) > 10_000_000 or "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
+        entities = self._parse_entities(xml)
+        self.registry.entities = entities
+        self.registry.loaded = True
+        return entities
+
+    def _parse_entities(self, xml: str):
+        """Parse locally so a cancelled worker cannot mutate the shared registry."""
+        try:
+            oversized = (
+                len(xml) > self.max_metadata_bytes or len(xml.encode("utf-8")) > self.max_metadata_bytes
+            )
+        except (TypeError, AttributeError, UnicodeError):
+            oversized = True
+        if oversized or "\x00" in xml or "<!DOCTYPE" in xml.upper() or "<!ENTITY" in xml.upper():
             raise AppError(
                 "D365_METADATA_INVALID",
                 "Unsafe or excessively large D365 metadata was rejected.",
@@ -113,7 +278,7 @@ class D365MetadataResolver:
             )
         try:
             root = ElementTree.fromstring(xml)
-        except ElementTree.ParseError:
+        except (ElementTree.ParseError, ValueError):
             raise AppError(
                 "D365_METADATA_INVALID", "Dynamics 365 returned malformed OData metadata.", status_code=502
             ) from None
@@ -123,50 +288,68 @@ class D365MetadataResolver:
             return tag.rsplit("}", 1)[-1]
 
         schemas = [item for item in root.iter() if local(item.tag) == "Schema"]
-        for schema in schemas:
-            namespace = schema.attrib.get("Namespace", "")
-            if schema.attrib.get("Alias"):
-                aliases[schema.attrib["Alias"]] = namespace
-            for item in schema:
-                if local(item.tag) == "EntityType":
-                    types[namespace + "." + item.attrib["Name"]] = item
-                if local(item.tag) == "EntityContainer":
-                    sets.extend(child for child in item if local(child.tag) == "EntitySet")
+        try:
+            for schema in schemas:
+                namespace = schema.attrib.get("Namespace", "")
+                if schema.attrib.get("Alias"):
+                    aliases[schema.attrib["Alias"]] = namespace
+                for item in schema:
+                    if local(item.tag) == "EntityType":
+                        types[namespace + "." + item.attrib["Name"]] = item
+                    if local(item.tag) == "EntityContainer":
+                        sets.extend(child for child in item if local(child.tag) == "EntitySet")
+        except KeyError:
+            raise AppError(
+                "D365_METADATA_INVALID", "Dynamics 365 returned malformed OData metadata.", status_code=502
+            ) from None
 
         def qualify(name):
             prefix, dot, suffix = name.rpartition(".")
             return aliases.get(prefix, prefix) + dot + suffix
 
-        def fields_for(name, seen=None):
-            seen = set() if seen is None else seen
+        resolved_types, resolved_depths = {}, {}
+
+        def fields_for(name):
+            seen, chain = set(), []
             name = qualify(name)
-            if name in seen or name not in types:
-                return {}, []
-            seen.add(name)
-            element = types[name]
-            fields, keys = (
-                fields_for(element.attrib["BaseType"], seen) if "BaseType" in element.attrib else ({}, [])
-            )
-            for child in element:
-                if local(child.tag) == "Property":
-                    fields[child.attrib["Name"]] = child.attrib.get("Type", "")
-                elif local(child.tag) == "Key":
-                    keys = [ref.attrib["Name"] for ref in child if local(ref.tag) == "PropertyRef"]
+            while name in types and name not in resolved_types:
+                if name in seen or len(chain) >= MAX_INHERITANCE_DEPTH:
+                    raise ValueError("Unsafe metadata inheritance")
+                seen.add(name)
+                chain.append(name)
+                name = qualify(types[name].attrib.get("BaseType", ""))
+            fields, keys = resolved_types.get(name, ({}, []))
+            depth = resolved_depths.get(name, 0)
+            for type_name in reversed(chain):
+                depth += 1
+                if depth > MAX_INHERITANCE_DEPTH:
+                    raise ValueError("Unsafe metadata inheritance")
+                fields, keys = fields.copy(), keys.copy()
+                for child in types[type_name]:
+                    if local(child.tag) == "Property":
+                        fields[child.attrib["Name"]] = child.attrib.get("Type", "")
+                    elif local(child.tag) == "Key":
+                        keys = [ref.attrib["Name"] for ref in child if local(ref.tag) == "PropertyRef"]
+                resolved_types[type_name] = fields, keys
+                resolved_depths[type_name] = depth
             return fields, keys
 
         entities = {}
-        for entity in sets:
-            name, type_name = entity.attrib["Name"], entity.attrib.get("EntityType", "")
-            fields, keys = fields_for(type_name)
-            entities[name] = EntityInfo(name, type_name, fields, keys)
+        try:
+            for entity in sets:
+                name, type_name = entity.attrib["Name"], entity.attrib.get("EntityType", "")
+                fields, keys = fields_for(type_name)
+                entities[name] = EntityInfo(name, type_name, fields, keys)
+        except (KeyError, ValueError):
+            raise AppError(
+                "D365_METADATA_INVALID", "Dynamics 365 returned malformed OData metadata.", status_code=502
+            ) from None
         if not entities:
             raise AppError(
                 "D365_METADATA_INVALID",
                 "No public entity sets were found in Dynamics 365 metadata.",
                 status_code=502,
             )
-        self.registry.entities = entities
-        self.registry.loaded = True
         return entities
 
     def score(self, info, role):
@@ -204,10 +387,38 @@ class D365MetadataResolver:
             score -= 25
         return score
 
-    async def load(self, on_stage=None):
-        response = await self.client.request("GET", "$metadata")
-        self.parse(response.text)
+    async def load(self, on_stage=None, *, force_refresh=False):
+        self.registry.entities = {}
+        self.registry.loaded = False
+        self.registry.resolved = {"customer_transactions": None, "open_transactions": None}
+        self.registry.candidates = {}
         self.registry.messages = []
+        self.cache_source = None
+        xml = None if force_refresh else await asyncio.to_thread(self._read_cached_xml)
+        if xml is not None:
+            try:
+                entities = await asyncio.to_thread(self._parse_entities, xml)
+            except AppError:
+                xml = None
+            else:
+                self.cache_source = "cache"
+                if on_stage is not None:
+                    on_stage("loading_cached_metadata")
+        if xml is None:
+            if on_stage is not None:
+                on_stage("loading_metadata")
+            response = await self.client.request(
+                "GET",
+                "$metadata",
+                timeout_seconds=self.settings.d365_metadata_timeout_seconds,
+                max_response_bytes=self.max_metadata_bytes,
+                retry_reads=False,
+            )
+            entities = await asyncio.to_thread(self._parse_entities, response.text)
+            self.cache_source = "network"
+            await self._write_cached_xml(response.text)
+        self.registry.entities = entities
+        self.registry.loaded = True
         if on_stage is not None:
             on_stage("discovering_entities")
         for role in ("customer_transactions", "open_transactions"):

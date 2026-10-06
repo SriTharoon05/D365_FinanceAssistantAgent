@@ -62,7 +62,17 @@ class D365ODataClient:
             )
         return url
 
-    async def request(self, method, path, *, params=None, payload=None, retry_reads=True):
+    async def request(
+        self,
+        method,
+        path,
+        *,
+        params=None,
+        payload=None,
+        retry_reads=True,
+        timeout_seconds=None,
+        max_response_bytes=None,
+    ):
         url = self._safe_url(path)
         method = method.upper()
         retries, refreshed, force_refresh = 0, False, False
@@ -76,11 +86,13 @@ class D365ODataClient:
             request_id = str(uuid4())
             started = time.monotonic()
             try:
-                response = await self.client.request(
+                response = await self._send_request(
                     method,
                     url,
                     params=params,
                     json=payload,
+                    timeout_seconds=timeout_seconds,
+                    max_response_bytes=max_response_bytes,
                     headers={
                         "Authorization": f"Bearer {token}",
                         "Accept": "application/xml"
@@ -95,6 +107,23 @@ class D365ODataClient:
                         ),
                     },
                 )
+            except (httpx.TimeoutException, TimeoutError):
+                self._failed("Dynamics 365 request timed out.")
+                if method != "GET":
+                    raise AppError(
+                        "D365_WRITE_OUTCOME_UNKNOWN",
+                        "The financial write outcome requires verification in Dynamics 365 before trying again. The write was not automatically retried.",
+                        status_code=409,
+                    ) from None
+                if max_response_bytes is not None:
+                    raise AppError(
+                        "D365_METADATA_TIMEOUT",
+                        "Dynamics 365 metadata download timed out. Customer access may still work. "
+                        "Check tenant responsiveness and D365_METADATA_TIMEOUT_SECONDS, then reconnect.",
+                        status_code=503,
+                        retryable=True,
+                    ) from None
+                raise D365ConnectionError("Dynamics 365 request timed out. Reconnect to continue.") from None
             except httpx.HTTPError:
                 self._failed("Dynamics 365 network request failed.")
                 if method != "GET":
@@ -147,6 +176,56 @@ class D365ODataClient:
                 raise map_http_error(response.status_code)
             self.last_success_at = datetime.now(timezone.utc).isoformat()
             return response
+
+    async def _send_request(self, method, url, *, timeout_seconds=None, max_response_bytes=None, **kwargs):
+        if timeout_seconds is not None:
+            kwargs["timeout"] = httpx.Timeout(
+                timeout_seconds,
+                connect=self.client.timeout.connect,
+                write=self.client.timeout.write,
+                pool=self.client.timeout.pool,
+            )
+        if max_response_bytes is None:
+            return await self.client.request(method, url, **kwargs)
+        if max_response_bytes <= 0:
+            raise ValueError("A positive response size limit is required")
+        # Streaming checks both declared and decoded body size before retaining metadata.
+        # Ordinary finance calls retain their configured transport and retry behavior.
+        async with asyncio.timeout(timeout_seconds):
+            async with self.client.stream(method, url, **kwargs) as upstream:
+                headers = dict(upstream.headers)
+                body = bytearray()
+                if upstream.status_code < 400:
+                    length = upstream.headers.get("Content-Length")
+                    try:
+                        declared = int(length) if length is not None else None
+                    except ValueError:
+                        declared = None
+                    if declared is not None and declared > max_response_bytes:
+                        raise self._metadata_size_error(max_response_bytes)
+                    async for chunk in upstream.aiter_bytes(chunk_size=65536):
+                        if len(body) + len(chunk) > max_response_bytes:
+                            raise self._metadata_size_error(max_response_bytes)
+                        body.extend(chunk)
+                # aiter_bytes returns decoded bytes. Reconstructing the closed response must
+                # not decode Content-Encoding again or retain the upstream transfer length.
+                for name in ("content-encoding", "content-length", "transfer-encoding"):
+                    headers.pop(name, None)
+                return httpx.Response(
+                    upstream.status_code,
+                    headers=headers,
+                    content=bytes(body),
+                    request=upstream.request,
+                    extensions=upstream.extensions,
+                )
+
+    def _metadata_size_error(self, max_response_bytes):
+        return AppError(
+            "D365_METADATA_TOO_LARGE",
+            f"Dynamics 365 metadata exceeds the configured {max_response_bytes / (1024 * 1024):g} MiB "
+            "size limit. Verify the metadata size before adjusting D365_METADATA_MAX_MB.",
+            status_code=502,
+        )
 
     def _failed(self, message):
         if self.on_failure:

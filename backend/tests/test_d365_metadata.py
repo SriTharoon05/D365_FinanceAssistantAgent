@@ -12,7 +12,8 @@ METADATA = """<edmx:Edmx xmlns:edmx="http://docs.oasis-open.org/odata/ns/edmx"><
 
 
 def resolver(settings=None, client=None):
-    return D365MetadataResolver(client, settings or Settings(_env_file=None))
+    settings = (settings or Settings(_env_file=None)).model_copy(update={"d365_metadata_cache_hours": 0})
+    return D365MetadataResolver(client, settings)
 
 
 def test_metadata_parses_namespace_alias_inherited_properties_and_keys():
@@ -57,7 +58,7 @@ async def test_auto_candidates_are_deterministic_and_validated():
 @pytest.mark.asyncio
 async def test_explicit_unknown_entity_leaves_capability_unavailable():
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=METADATA)
 
         async def get(self, *args, **kwargs):
@@ -84,7 +85,7 @@ async def test_stalled_candidate_is_skipped_with_timeout_diagnostic(monkeypatch)
     stages = []
 
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=METADATA)
 
         async def get(self, entity, **kwargs):
@@ -95,7 +96,7 @@ async def test_stalled_candidate_is_skipped_with_timeout_diagnostic(monkeypatch)
             return []
 
     registry = await resolver(client=Client()).load(on_stage=stages.append)
-    assert stages == ["discovering_entities"]
+    assert stages == ["loading_metadata", "discovering_entities"]
     assert registry.resolved["open_transactions"] == "CustomerOpenTransactionsA"
     assert calls == ["CustomerTransactions", "CustomerOpenTransactions", "CustomerOpenTransactionsA"]
     assert any(
@@ -112,7 +113,7 @@ async def test_systemic_candidate_failure_aborts_discovery(code):
     calls = []
 
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=METADATA)
 
         async def get(self, entity, **kwargs):
@@ -128,7 +129,7 @@ async def test_systemic_candidate_failure_aborts_discovery(code):
 @pytest.mark.asyncio
 async def test_unexpected_candidate_failure_is_not_hidden():
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=METADATA)
 
         async def get(self, entity, **kwargs):
@@ -147,7 +148,7 @@ async def test_auto_probe_limit_preserves_full_candidates_for_diagnostics():
     calls = []
 
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=xml)
 
         async def get(self, entity, **kwargs):
@@ -180,7 +181,7 @@ async def test_explicit_entity_is_probed_even_outside_automatic_limit():
     calls = []
 
     class Client:
-        async def request(self, *args):
+        async def request(self, *args, **kwargs):
             return httpx.Response(200, text=xml)
 
         async def get(self, entity, **kwargs):

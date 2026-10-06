@@ -212,7 +212,10 @@ Treat this value as a secret. Changing it invalidates existing signed browser se
 | `D365_MOCK_MODE` | `false`; opt into synthetic data with `true`. |
 | `D365_WRITE_ACTIONS_ENABLED` | `true`; set `false` to remove supported mutation tools from the assistant. Confirmation remains required when enabled. |
 | `D365_TIMEOUT_SECONDS` | `30`; request timeout. |
-| `D365_CONNECTION_TIMEOUT_SECONDS` | `60`; overall connection/reconnect budget across authentication, customer health check, metadata and capability discovery. Must be greater than `0` and no more than `300` seconds. |
+| `D365_CONNECTION_TIMEOUT_SECONDS` | `60`; primary connection-phase budget for authentication and the customer health check. Must be greater than `0` and no more than `300` seconds. |
+| `D365_METADATA_TIMEOUT_SECONDS` | `180`; separate metadata-phase budget for schema loading and capability discovery. Must be greater than `0` and no more than `900` seconds. |
+| `D365_METADATA_MAX_MB` | `64`; maximum metadata document size. Allowed range: `1`–`256` MB. |
+| `D365_METADATA_CACHE_HOURS` | `24`; structural metadata cache lifetime. Allowed range: `0`–`168` hours; `0` disables cache use. |
 | `D365_MAX_RETRIES` | `2`; bounded transient read retry policy. |
 | `D365_DELETE_ALLOWED_PREFIXES` | `TEST-,DEMO-,CHAT-`; restrict test-customer deletion. |
 | `D365_PAYMENT_JOURNAL_NAME` | `CustPay`; customer payment journal configuration. |
@@ -292,15 +295,30 @@ After entering credentials and restarting the backend, keep Uvicorn running whil
 3. Confirm a successful connection and inspect the resolved capabilities before asking for balances or offering writes.
 4. Use entity diagnostics if transaction discovery is unavailable.
 
-The status includes non-secret health information such as company, last success, error summary, metadata readiness, capabilities and latency. It also reports `connection_stage`, `connection_elapsed_seconds` and `connection_timeout_seconds` so you can identify which part of the current or most recent attempt was reached. HTTP 200 from this local status route does not establish a successful D365 token or ERP read; inspect the JSON `status` and capabilities. The frontend refreshes status periodically and when focus returns. Missing configuration or lost connectivity must never turn into an invented financial answer. Saved conversations remain viewable while ERP access is disconnected.
+The status includes non-secret health information such as company, last success, error summary, metadata readiness, capabilities and latency. It reports `connection_stage`, total `connection_elapsed_seconds`, combined `connection_timeout_seconds`, and current-phase `connection_phase_elapsed_seconds` / `connection_phase_timeout_seconds` so you can identify which part of the current or most recent attempt was reached. HTTP 200 from this local status route does not establish a successful D365 token or ERP read; inspect the JSON `status` and capabilities. The frontend refreshes status periodically and when focus returns. Missing configuration or lost connectivity must never turn into an invented financial answer. Saved conversations remain viewable while ERP access is disconnected.
 
-A connection attempt has one overall deadline, configured by `D365_CONNECTION_TIMEOUT_SECONDS=60` by default. It ends in a reported failure when that budget expires rather than remaining indefinitely in Connecting. A repeated reconnect request during an active attempt returns its current status instead of queuing another attempt or restarting the deadline.
+A connection attempt has two bounded phases: authentication/customer access uses `D365_CONNECTION_TIMEOUT_SECONDS=60`, then metadata loading/discovery uses `D365_METADATA_TIMEOUT_SECONDS=180`. The effective maximum reported to the UI is their sum: **240 seconds by default**. A phase timeout ends in a reported failure rather than remaining indefinitely in Connecting. A repeated reconnect request during an active attempt returns its current status instead of queuing another attempt or restarting the phase deadline.
+
+Existing `backend/.env` files, including those already setting `D365_CONNECTION_TIMEOUT_SECONDS=60`, work with the new defaults after updating and restarting the backend. You do not need to add or change environment values to use the separate metadata budget and cache. Optional metadata settings are listed above; `D365_TIMEOUT_SECONDS=30` continues to control normal finance HTTP requests.
 
 API calls use a signed local session cookie. An API client should retain cookies across requests, just as the browser does. Swagger is convenient for inspecting schemas and trying endpoints on your local machine; this local cookie is not an enterprise authentication system.
 
 ## Metadata and transaction entity discovery
 
-Reconnect authenticates, checks the configured customer entity with a safe read, loads `GET /data/$metadata`, parses public entity sets and their fields, and evaluates candidates for customer transactions and open transactions. Deterministic scoring uses semantic field coverage: customer account, invoice/reference, transaction/due dates, currency, amount, remaining balance, voucher and company. Candidates are tested with safe `$top=1` reads rather than trusted from their names alone. Discovery probes at most three candidates per role; each probe has a five-second limit and no transient retries, within the overall connection budget. Probe timeouts and unavailable/bounded-discovery explanations appear in capability/entity diagnostics. These discovery bounds do not change the normal finance-read retry policy.
+Reconnect authenticates, checks the configured customer entity with a safe read, loads cached structural metadata or downloads `GET /data/$metadata`, parses public entity sets and their fields, and evaluates candidates for customer transactions and open transactions. The first large Finance & Operations schema download can take up to the separate three-minute metadata budget. Later reconnects can reuse a valid cache and avoid downloading that document again; authentication, customer permissions and transaction-entity probes still run afresh.
+
+Deterministic scoring uses semantic field coverage: customer account, invoice/reference, transaction/due dates, currency, amount, remaining balance, voucher and company. Candidates are tested with safe `$top=1` reads rather than trusted from their names alone. Discovery probes at most three candidates per role; each probe has a five-second limit and no transient retries, within the metadata-phase budget. Probe timeouts and unavailable/bounded-discovery explanations appear in capability/entity diagnostics. These discovery bounds do not change the normal finance-read retry policy.
+
+The persistent cache stores **structural XML only**, under `metadata-cache/` beside the configured local database. The default directory is **`backend/data/metadata-cache/`**. Cache filenames are hashed from the D365 endpoint, tenant and client identity so configurations remain separate. The cache does not contain access tokens, client secrets, customer/invoice records or financial balances. Live permission checks and transaction probes are never satisfied from cached finance data. The default lifetime is 24 hours; `D365_METADATA_CACHE_HOURS=0` disables cache use.
+
+To force a fresh schema download before the cache expires, let any active connection attempt finish, keep Uvicorn running and use a second PowerShell window:
+
+```powershell
+$Reconnect = Invoke-RestMethod -Method Post -Uri "http://localhost:8000/api/integrations/d365/reconnect?refresh_metadata=true" -TimeoutSec 260
+$Reconnect | ConvertTo-Json -Depth 8
+```
+
+This explicitly bypasses the structural cache for the new connection attempt. A request overlapping an existing check is coalesced and does not queue a second download. The command can wait for the metadata phase to finish; inspect progress in the frontend meanwhile. Its client timeout accommodates the default 240-second maximum. If you deliberately increase either phase budget, adjust the client timeout to exceed their sum. A normal reconnect reuses valid cached metadata while repeating the live checks.
 
 Names differ across D365 environments. The resolver must not infer a current open balance solely from an original invoice amount. When a reliable remaining-balance source is unavailable, balance/overdue capabilities are unavailable and the app explains the limitation. Other verified features can remain available.
 
@@ -500,7 +518,9 @@ The JSON contains non-secret diagnostics. Interpret its `status`, not just the H
 | `disconnected` | Read `last_error_summary` and the stage; fix that prerequisite before retrying. |
 | “Unable to connect to the remote server” for `localhost:8000` | The local API could not be reached. Check that Uvicorn is still running on port 8000. If you stopped it with Ctrl+C, start it again in the first window before repeating this command. This result does not diagnose the D365 credentials. |
 
-With `mock_mode=true`, Connected describes only the isolated mock adapter; no live authentication occurs. For a live attempt, `connection_stage` progresses through `authenticating`, `checking_customers`, `loading_metadata` and `discovering_entities`, then reaches `ready` or `failed`. `connection_elapsed_seconds` shows the attempt duration, and `connection_timeout_seconds` shows its overall budget. With the default setting, a connection attempt must finish or fail within approximately 60 seconds; timeout diagnostics identify the stage reached. Do not repeatedly click Reconnect: overlapping requests are coalesced and do not create a new deadline.
+With `mock_mode=true`, Connected describes only the isolated mock adapter; no live authentication occurs. A live attempt progresses through `authenticating` and `checking_customers`, then `loading_metadata` or `loading_cached_metadata`, and `discovering_entities`, before reaching `ready` or `failed`. Inspect `connection_elapsed_seconds` for total time and `connection_timeout_seconds` for the effective combined limit. `connection_phase_elapsed_seconds` and `connection_phase_timeout_seconds` show time spent/allowed in the current phase. With the defaults, the primary phase has 60 seconds and the metadata phase has 180 seconds, for an effective maximum of 240 seconds. Do not repeatedly click Reconnect: overlapping requests are coalesced and do not create a new phase deadline.
+
+If logs show successful authentication and a successful customer check followed by `loading_metadata`, inspect the metadata phase rather than changing credentials blindly. A first schema download is allowed up to three minutes and is bounded by its own timeout/size limit. Update and restart the backend to use this behavior; existing `.env` values need no manual change. Subsequent reconnects can load the structural cache faster while repeating live permission/probe checks. This diagnostic sequence does not verify customer balances or other finance results.
 
 In the Uvicorn terminal, look for structured `d365_connection_stage` and `d365_connection_finished` events. They report the stage/status, elapsed time and a safe error code or exception type without provider bodies, authorization headers or credentials. These observations distinguish authentication, ERP permissions, network and discovery failures. A reachable local API with a failing ERP connection is not evidence that Python 3.13.3 failed, and no particular tenant cause can be inferred from Connecting alone.
 
@@ -526,7 +546,7 @@ for name in ("D365_TENANT_ID", "D365_CLIENT_ID", "D365_CLIENT_SECRET"):
 
 This checks the current `.env` and that terminal's environment; it does not validate a secret or prove that the running backend loaded the same values. Environment variables override `.env`, and variables set only in the original PowerShell window may differ from the second window. Never print the environment, `.env` contents, secret values or tokens while troubleshooting.
 
-After editing credentials or connection settings, **restart Uvicorn** in the first window so it loads the new configuration, leave it running, then inspect status and reconnect from the frontend. A reconnect refreshes authentication and metadata using the settings already loaded by that backend process; it does not reload edited `.env` files. Live failures remain live failures; the app never automatically switches to mock data. Use `-Mock` only when you explicitly want an isolated demonstration.
+After editing credentials or connection settings, **restart Uvicorn** in the first window so it loads the new configuration, leave it running, then inspect status and reconnect from the frontend. A reconnect refreshes authentication and reuses or refreshes structural metadata using the settings already loaded by that backend process; it does not reload edited `.env` files. Live failures remain live failures; the app never automatically switches to mock data. Use `-Mock` only when you explicitly want an isolated demonstration.
 
 ### D365 401 or token failure
 
@@ -564,7 +584,7 @@ Test-NetConnection org1a43c536.operations.dynamics.com -Port 443
 
 Replace the second hostname if you changed `D365_BASE_URL`. These commands check DNS/TCP reachability only; success does not validate TLS, authentication or ERP permissions. If they fail, inspect local/corporate network and proxy rules before retrying. If TCP works but the app reports a TLS/proxy or HTTP failure, use the safe stage/error diagnostics in the backend logs. Retain TLS verification.
 
-`D365_TIMEOUT_SECONDS` controls normal request timeouts; `D365_CONNECTION_TIMEOUT_SECONDS` caps the complete connection attempt. Increasing the overall limit is an explicit configuration change, not proof that authentication or permissions are correct. Restart the backend after changing it. The frontend stays usable for saved history while ERP access is disconnected. Azure OpenAI connectivity is a separate dependency and is checked under its own troubleshooting entry.
+`D365_TIMEOUT_SECONDS` controls normal request timeouts and remains `30` by default. `D365_CONNECTION_TIMEOUT_SECONDS` caps authentication/customer checking; `D365_METADATA_TIMEOUT_SECONDS` independently caps metadata loading/discovery. The defaults work without adding new values to an existing `.env`. Optional timeout/cache/size tuning is an explicit configuration change, not proof that authentication or permissions are correct; restart the backend after changing it. The frontend stays usable for saved history while ERP access is disconnected. Azure OpenAI connectivity is a separate dependency and is checked under its own troubleshooting entry.
 
 ### Azure OpenAI unavailable
 

@@ -56,7 +56,7 @@ Open **http://localhost:5173**. The API is **http://localhost:8000** and Swagger
 
 For live use, edit **`backend/.env`**, restart the backend and omit `-Mock` / `--mock`. Keep frontend configuration in **`frontend/.env`**. The [developer guide](guide.md) explains every setting, Windows manual setup, entity discovery, voice, migrations, tests and live validation.
 
-If D365 stays **Connecting**, keep Uvicorn running and inspect the status JSON from a second PowerShell window. A local status endpoint returning HTTP 200 confirms that the API answered; the JSON `status`, connection stage and error summary explain whether ERP access was verified. Connection attempts have a 60-second overall limit by default. See [connection troubleshooting](guide.md#d365-stays-connecting-or-reconnecting) for safe checks and configuration.
+If D365 stays **Connecting**, keep Uvicorn running and inspect the status JSON from a second PowerShell window. A local status endpoint returning HTTP 200 confirms that the API answered; inspect the JSON stage and error summary. Authentication/customer checks have a 60-second budget, followed by a separate 180-second metadata budget: the default maximum is 240 seconds. Later reconnects can reuse a valid structural schema cache while checking ERP permissions afresh. Existing `.env` files need no new values for this fix; update and restart the backend. See [connection troubleshooting](guide.md#d365-stays-connecting-or-reconnecting) for safe checks and optional settings.
 
 ## Checks
 

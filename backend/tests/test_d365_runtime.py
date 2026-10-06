@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock
 
 import httpx
@@ -27,6 +28,7 @@ async def runtime(monkeypatch):
         d365_client_id="client-id",
         d365_client_secret=TEST_SECRET,
         d365_connection_timeout_seconds=0.5,
+        d365_metadata_timeout_seconds=0.2,
     )
 
     def unexpected_http(request):
@@ -77,8 +79,9 @@ def assert_terminal_failure(status):
 
 
 @pytest.mark.parametrize("stalled_step", ["auth", "customers", "metadata"])
-async def test_overall_connection_deadline_covers_every_required_step(runtime, monkeypatch, stalled_step):
+async def test_each_connection_phase_enforces_its_own_deadline(runtime, monkeypatch, stalled_step):
     runtime.settings.d365_connection_timeout_seconds = 0.03
+    runtime.settings.d365_metadata_timeout_seconds = 0.03
     never_ready = asyncio.Event()
 
     async def stall(*args, **kwargs):
@@ -93,8 +96,56 @@ async def test_overall_connection_deadline_covers_every_required_step(runtime, m
     # The outer deadline bounds a broken implementation as well as the test.
     status = await asyncio.wait_for(runtime.reconnect(initial=True), timeout=0.5)
     assert_terminal_failure(status)
-    assert status["connection_timeout_seconds"] == 0.03
+    assert status["connection_timeout_seconds"] == pytest.approx(0.06)
     assert "time" in status["last_error_summary"].lower()
+    if stalled_step == "metadata":
+        assert "metadata" in status["last_error_summary"].lower()
+        assert "0.03" in status["last_error_summary"]
+    else:
+        runtime.metadata.load.assert_not_awaited()
+
+
+async def test_slow_metadata_can_exceed_primary_budget_and_still_connect(runtime, monkeypatch):
+    runtime.settings.d365_connection_timeout_seconds = 0.03
+    runtime.settings.d365_metadata_timeout_seconds = 0.2
+
+    async def slow_metadata(on_stage=None):
+        status = runtime.status()
+        assert status["connection_stage"] == "loading_metadata"
+        assert status["connection_phase_timeout_seconds"] == 0.2
+        assert status["connection_phase_elapsed_seconds"] >= 0
+        await asyncio.sleep(0.06)
+        return mark_metadata_ready(runtime, on_stage=on_stage)
+
+    monkeypatch.setattr(runtime.metadata, "load", AsyncMock(side_effect=slow_metadata))
+    started = time.monotonic()
+    status = await asyncio.wait_for(runtime.reconnect(initial=True), timeout=0.5)
+    assert time.monotonic() - started >= 0.06
+    assert status["status"] == "connected"
+    assert status["connection_stage"] == "ready"
+    assert status["connection_timeout_seconds"] == pytest.approx(0.23)
+
+
+def test_existing_primary_timeout_configuration_gets_independent_metadata_default(tmp_path, monkeypatch):
+    monkeypatch.delenv("D365_METADATA_TIMEOUT_SECONDS", raising=False)
+    old_configuration = tmp_path / ".env"
+    old_configuration.write_text("D365_CONNECTION_TIMEOUT_SECONDS=60\n", encoding="utf-8")
+    settings = Settings(_env_file=old_configuration)
+    assert settings.d365_connection_timeout_seconds == 60
+    assert settings.d365_metadata_timeout_seconds == 180
+
+
+async def test_explicit_metadata_refresh_bypasses_cached_schema(runtime, monkeypatch):
+    mark_metadata_ready(runtime)
+
+    async def fresh_metadata(on_stage=None, force_refresh=False):
+        assert force_refresh is True
+        return mark_metadata_ready(runtime, on_stage=on_stage)
+
+    monkeypatch.setattr(runtime.metadata, "load", AsyncMock(side_effect=fresh_metadata))
+    status = await runtime.reconnect(refresh_metadata=True)
+    assert status["status"] == "connected"
+    assert runtime.metadata.load.await_args.kwargs["force_refresh"] is True
 
 
 async def test_unexpected_metadata_error_finishes_connection_and_redacts_details(runtime, monkeypatch):
@@ -135,21 +186,34 @@ async def test_simultaneous_reconnect_returns_active_attempt_without_duplicate_w
         await asyncio.gather(first, return_exceptions=True)
 
 
-async def test_cancelled_connection_becomes_terminal_and_can_be_retried(runtime, monkeypatch):
+@pytest.mark.parametrize("cancelled_step", ["auth", "metadata"])
+async def test_cancelled_connection_becomes_terminal_and_can_be_retried(runtime, monkeypatch, cancelled_step):
     entered = asyncio.Event()
+    original_metadata_load = runtime.metadata.load
 
     async def authenticate(*args, **kwargs):
         entered.set()
         await asyncio.Event().wait()
 
-    monkeypatch.setattr(runtime.auth, "get_token", AsyncMock(side_effect=authenticate))
+    async def unfinished_metadata(on_stage=None):
+        mark_metadata_ready(runtime, on_stage=on_stage)
+        entered.set()
+        await asyncio.Event().wait()
+
+    if cancelled_step == "auth":
+        monkeypatch.setattr(runtime.auth, "get_token", AsyncMock(side_effect=authenticate))
+    else:
+        monkeypatch.setattr(runtime.metadata, "load", AsyncMock(side_effect=unfinished_metadata))
     attempt = asyncio.create_task(runtime.reconnect(initial=True))
     await asyncio.wait_for(entered.wait(), timeout=0.5)
     attempt.cancel()
     with pytest.raises(asyncio.CancelledError):
         await attempt
     assert_terminal_failure(runtime.status())
+    with pytest.raises(AppError):
+        await runtime.finance.get_customer("TEST-001", company="usmf")
     monkeypatch.setattr(runtime.auth, "get_token", AsyncMock(return_value=TEST_TOKEN))
+    monkeypatch.setattr(runtime.metadata, "load", original_metadata_load)
     retried = await runtime.reconnect()
     assert retried["status"] == "connected"
     assert retried["connection_stage"] == "ready"
@@ -172,6 +236,7 @@ async def test_stale_metadata_never_permits_finance_reads_during_discovery(runti
         status = runtime.status()
         assert status["status"] == "connecting"
         assert status["connection_stage"] == "discovering_entities"
+        assert status["connection_phase_timeout_seconds"] == 0.2
         assert status["metadata_loaded"]
         calls_before_read = runtime.client.get.await_count
         with pytest.raises(AppError) as rejected:
