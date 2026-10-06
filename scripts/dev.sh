@@ -13,6 +13,7 @@ esac
 if [[ ! -x "$repo_root/backend/.venv/bin/python" || ! -d "$repo_root/frontend/node_modules" ]]; then
   bash "$repo_root/scripts/setup.sh"
 fi
+"$repo_root/backend/.venv/bin/python" "$repo_root/scripts/check_backend.py" --check-python --existing-venv
 [[ -f "$repo_root/backend/.env" ]] || cp "$repo_root/backend/.env.example" "$repo_root/backend/.env"
 [[ -f "$repo_root/frontend/.env" ]] || cp "$repo_root/frontend/.env.example" "$repo_root/frontend/.env"
 

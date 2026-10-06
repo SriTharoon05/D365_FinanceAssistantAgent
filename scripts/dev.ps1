@@ -10,6 +10,8 @@ $Python = Join-Path $BackendDir '.venv\Scripts\python.exe'
 if (-not (Test-Path $Python) -or -not (Test-Path (Join-Path $FrontendDir 'node_modules'))) {
     & (Join-Path $PSScriptRoot 'setup.ps1')
 }
+& $Python (Join-Path $PSScriptRoot 'check_backend.py') --check-python --existing-venv
+if ($LASTEXITCODE -ne 0) { throw 'Python 3.13.3 is required before starting the development servers.' }
 foreach ($Directory in @($BackendDir, $FrontendDir)) {
     if (-not (Test-Path (Join-Path $Directory '.env'))) {
         Copy-Item (Join-Path $Directory '.env.example') (Join-Path $Directory '.env')

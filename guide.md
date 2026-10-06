@@ -35,7 +35,7 @@ The frontend is a single application and the backend a single service. The backe
 
 ## Prerequisites
 
-- Python **3.12** with `venv` and `pip`. On Windows, install the Python launcher (`py`) as well. Python 3.12 is the tested version.
+- Python **3.13.3** with `venv` and `pip`. On Windows, install the Python launcher (`py`) as well. Use this exact patch version; the setup and dev scripts reject other versions, including an existing older virtual environment. Official release installers are available at https://www.python.org/downloads/release/python-3133/.
 - Node.js **22 LTS** with npm. The frontend requires Node 20.19 or newer; use Node 22 for the standard workflow.
 - Git and a terminal. Windows PowerShell 5.1+ works for the included scripts.
 - Outbound HTTPS to package registries during installation. Live operation additionally needs your Entra tenant token endpoint, D365 host, Azure OpenAI host and optionally `api.groq.com`.
@@ -43,7 +43,7 @@ The frontend is a single application and the backend a single service. The backe
 Check installations:
 
 ```powershell
-py -3.12 --version
+py -3.13 --version  # Must report Python 3.13.3.
 node --version
 npm.cmd --version
 git --version
@@ -58,7 +58,7 @@ From the cloned repository root:
 .\scripts\dev.ps1 -Mock
 ```
 
-The setup script creates `backend/.venv`, installs hash-locked Python requirements and the locked npm dependencies, creates local `.env` files only if absent, and applies Alembic migrations. The dev script checks the backend port and health before starting Vite and runs migrations before startup. `-Mock` temporarily sets `D365_MOCK_MODE=true` for the launched backend; it does not rewrite your `.env` file. Stop with **Ctrl+C**.
+The setup script validates Python 3.13.3, creates `backend/.venv`, installs hash-locked Python requirements and the locked npm dependencies, creates local `.env` files only if absent, and applies Alembic migrations. An existing virtual environment is checked before any dependency installation; it is not silently reused with a different Python version. The dev script also verifies Python, checks the backend port and health before starting Vite and runs migrations before startup. `-Mock` temporarily sets `D365_MOCK_MODE=true` for the launched backend; it does not rewrite your `.env` file. Stop with **Ctrl+C**.
 
 If your personal PowerShell policy blocks locally downloaded scripts, use a process-scoped policy for the terminal you control:
 
@@ -79,11 +79,15 @@ URLs:
 
 ## Manual backend setup: Windows PowerShell
 
-Run from the repository root. This activation command is convenient, but all commands can instead use `.\.venv\Scripts\python.exe` directly.
+Run from the repository root. If `.venv` already exists with a different interpreter, follow [the recreation procedure](#mismatched-virtual-environment) first. This activation command is convenient, but all commands can instead use `.\.venv\Scripts\python.exe` directly.
 
 ```powershell
 cd backend
-py -3.12 -m venv .venv
+py -3.13 ..\scripts\check_backend.py --check-python
+if ($LASTEXITCODE -ne 0) { throw "Install Python 3.13.3 before continuing." }
+py -3.13 -m venv .venv
+.\.venv\Scripts\python.exe ..\scripts\check_backend.py --check-python --existing-venv
+if ($LASTEXITCODE -ne 0) { throw "Recreate the virtual environment with Python 3.13.3." }
 .\.venv\Scripts\Activate.ps1
 python -m pip install --require-hashes -r requirements.lock
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
@@ -96,9 +100,13 @@ For a credentials-free demonstration, set `D365_MOCK_MODE=true` in `.env` or run
 
 ## Manual backend setup: macOS/Linux
 
+If `.venv` already exists with a different interpreter, follow [the recreation procedure](#mismatched-virtual-environment) first.
+
 ```bash
 cd backend
-python3.12 -m venv .venv
+python3.13 ../scripts/check_backend.py --check-python
+python3.13 -m venv .venv
+.venv/bin/python ../scripts/check_backend.py --check-python --existing-venv
 source .venv/bin/activate
 python -m pip install --require-hashes -r requirements.lock
 test -f .env || cp .env.example .env
@@ -107,7 +115,7 @@ python -m alembic upgrade head
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload
 ```
 
-For mock mode, prefix startup with `D365_MOCK_MODE=true`. Use `unset D365_MOCK_MODE` to remove a persistent shell override. If Python's `venv` module is unavailable, install the matching operating-system venv package; do not install the app into your system Python.
+Both version checks must succeed before continuing the manual commands. `python3.13` must resolve to Python 3.13.3; if another 3.13 patch version is selected, install/select the pinned interpreter first. For mock mode, prefix startup with `D365_MOCK_MODE=true`. Use `unset D365_MOCK_MODE` to remove a persistent shell override. If Python's `venv` module is unavailable, install the matching operating-system venv package; do not install the app into your system Python.
 
 The bundled launchers are also available:
 
@@ -115,6 +123,31 @@ The bundled launchers are also available:
 bash scripts/setup.sh
 bash scripts/dev.sh --mock
 ```
+
+## Mismatched virtual environment
+
+A virtual environment keeps the interpreter used when it was created. Installing Python 3.13.3 does not upgrade an existing `backend/.venv`; setup and dev launchers reject it if it uses a different patch version. Stop the dev servers, deactivate the environment, then recreate only this generated directory. Keep `backend/.env`, `backend/data/` and the source files.
+
+Windows PowerShell, from the repository root:
+
+```powershell
+py -3.13 .\scripts\check_backend.py --check-python
+if ($LASTEXITCODE -ne 0) { throw "Install/select Python 3.13.3 before recreating the environment." }
+if (Get-Command deactivate -ErrorAction SilentlyContinue) { deactivate }
+if (Test-Path .\backend\.venv) { Remove-Item -Recurse -Force .\backend\.venv }
+.\scripts\setup.ps1
+```
+
+macOS/Linux, from the repository root, after stopping servers and running `deactivate` if the old environment is active:
+
+```bash
+python3.13 scripts/check_backend.py --check-python
+# Continue only when the exact-version check succeeds.
+rm -rf -- backend/.venv
+bash scripts/setup.sh
+```
+
+If `py -3.13` or `python3.13` selects another patch release, correct your installed interpreter/PATH before recreating the environment. The setup script checks the base interpreter and the new venv again; it never silently accepts another version. Deleting `.venv` removes installed Python packages, not local chat data or credentials.
 
 ## Frontend setup
 
@@ -375,7 +408,7 @@ npm.cmd run build
 
 `npm run test:watch` starts interactive Vitest. `npm run format` applies Prettier intentionally to frontend source. `npm run build` includes TypeScript checks and writes the production bundle to ignored `frontend/dist/`.
 
-GitHub Actions installs Python 3.12 and Node 22, runs backend lint/format/tests/migrations, frontend lint/format/tests/build and separate mock Chromium smoke tests. The workflow has read-only repository contents permissions and requires no external secrets. Automated mock tests and the manual live acceptance procedure answer different questions: the former validates deterministic application behavior; the latter validates compatibility with your actual tenant and credentials.
+GitHub Actions installs Python 3.13.3 and Node 22, runs backend lint/format/tests/migrations, frontend lint/format/tests/build and separate mock Chromium smoke tests. The workflow has read-only repository contents permissions and requires no external secrets. Automated mock tests and the manual live acceptance procedure answer different questions: the former validates deterministic application behavior; the latter validates compatibility with your actual tenant and credentials.
 
 ### Browser smoke tests
 

@@ -28,11 +28,11 @@ Posting and settlement remain manual in Dynamics 365. The application does not m
 
 ## Stack
 
-React, strict TypeScript, Vite, Tailwind CSS, Radix primitives, TanStack Query and React Router; Python 3.12, FastAPI, Pydantic v2, async SQLAlchemy, Alembic, SQLite, httpx, LangGraph and Azure OpenAI. Vitest/Testing Library and pytest cover the application without live external services.
+React, strict TypeScript, Vite, Tailwind CSS, Radix primitives, TanStack Query and React Router; Python 3.13.3, FastAPI, Pydantic v2, async SQLAlchemy, Alembic, SQLite, httpx, LangGraph and Azure OpenAI. Vitest/Testing Library and pytest cover the application without live external services.
 
 ## Quick start
 
-Install Python 3.12, Node.js 22 LTS and Git, then clone the repository.
+Install **Python 3.13.3**, Node.js 22 LTS and Git, then clone the repository. Setup and development launchers require that exact Python patch version, including for an existing virtual environment. See [venv recreation](guide.md#mismatched-virtual-environment) when upgrading an existing checkout.
 
 Windows PowerShell:
 

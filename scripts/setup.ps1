@@ -15,16 +15,22 @@ if (-not (Get-Command npm.cmd -ErrorAction SilentlyContinue)) {
     throw 'Install Node.js 22+ with npm before running setup.'
 }
 
+if ((Test-Path (Join-Path $BackendDir '.venv')) -and -not (Test-Path $Python)) {
+    throw 'backend/.venv is incomplete. Stop servers, remove only backend/.venv, and rerun setup with Python 3.13.3.'
+}
+
 if (-not (Test-Path $Python)) {
     if (-not (Get-Command py -ErrorAction SilentlyContinue)) {
-        throw 'Install Python 3.12 with the Windows Python launcher before running setup.'
+        throw 'Install Python 3.13.3 with the Windows Python launcher before running setup.'
     }
-    & py -3.12 -m venv (Join-Path $BackendDir '.venv')
+    & py -3.13 (Join-Path $PSScriptRoot 'check_backend.py') --check-python
+    Assert-ExitCode 'Python 3.13.3 version check'
+    & py -3.13 -m venv (Join-Path $BackendDir '.venv')
     Assert-ExitCode 'Virtual environment creation'
 }
 
-& $Python -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)'
-Assert-ExitCode 'Python version check'
+& $Python (Join-Path $PSScriptRoot 'check_backend.py') --check-python --existing-venv
+Assert-ExitCode 'Python 3.13.3 virtual environment check'
 & $Python -m pip install --require-hashes -r (Join-Path $BackendDir 'requirements.lock')
 Assert-ExitCode 'Backend dependency installation'
 
