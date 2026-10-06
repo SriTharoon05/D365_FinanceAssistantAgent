@@ -908,7 +908,7 @@ svg {
 }
 .composer-area {
   padding: 12px 0 14px;
-  width: min(100% - 64px, 800px);
+  width: calc(100% - 64px);
   margin: 0 auto;
   position: relative;
   flex-shrink: 0;
@@ -1098,7 +1098,7 @@ svg {
   font-size: 11px;
 }
 .messages {
-  width: min(100% - 64px, 800px);
+  width: calc(100% - 64px);
   margin: 0 auto;
   padding: 24px 0 12px;
 }
