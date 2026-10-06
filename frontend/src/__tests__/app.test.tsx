@@ -22,7 +22,7 @@ function renderApp(path = '/') {
       mutations: { retry: false },
     },
   });
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <MemoryRouter initialEntries={[path]}>
         <Routes>
@@ -32,6 +32,7 @@ function renderApp(path = '/') {
       </MemoryRouter>
     </QueryClientProvider>,
   );
+  return { ...view, client };
 }
 
 function mockBackend(initialHistory: Message[] = []) {
@@ -73,6 +74,47 @@ function message(id: string, role: 'user' | 'assistant', content: string): Messa
 }
 
 describe('Finance Assistant application', () => {
+  it('treats a coalesced reconnect response as pending until a health check verifies the connection', async () => {
+    mockBackend([message('assistant-1', 'assistant', 'Saved finance history remains available.')]);
+    vi.mocked(endpoints.status).mockResolvedValue(unavailableStatus);
+    const pending = {
+      ...connectedStatus,
+      status: 'connecting' as const,
+      connection_stage: 'loading_metadata',
+      connection_elapsed_seconds: 42,
+      connection_timeout_seconds: 60,
+      metadata_loaded: false,
+      last_error_summary: null,
+    };
+    const reconnect = vi.spyOn(endpoints, 'reconnect').mockResolvedValue(pending);
+    const { client } = renderApp('/chat/conversation-1');
+    expect(await screen.findByText('Dynamics 365 is disconnected')).toBeVisible();
+    await userEvent.click(screen.getByRole('button', { name: 'Reconnect' }));
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Dynamics 365 connecting. Open integration settings',
+      }),
+    ).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Dynamics 365 OData metadata.');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByText('Saved finance history remains available.')).toBeVisible();
+    vi.mocked(endpoints.status).mockResolvedValue(connectedStatus);
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: ['integration'] });
+    });
+
+    expect(
+      await screen.findByRole('button', {
+        name: 'Dynamics 365 connected. Open integration settings',
+      }),
+    ).toBeVisible();
+    expect(screen.queryByText('Connecting to Dynamics 365')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(reconnect).toHaveBeenCalledTimes(1);
+  });
+
   it('waits for the first session bootstrap and deduplicates immediate new-conversation clicks', async () => {
     const backend = mockBackend();
     let finishBootstrap!: (conversations: Conversation[]) => void;

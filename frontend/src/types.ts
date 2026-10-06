@@ -8,6 +8,9 @@ export interface IntegrationStatus {
   metadata_loaded: boolean;
   capabilities: Record<string, boolean | string | string[] | Record<string, string | null> | null>;
   latency_ms?: number | null;
+  connection_stage?: string | null;
+  connection_elapsed_seconds?: number | null;
+  connection_timeout_seconds?: number | null;
   mock_mode: boolean;
 }
 export interface Capabilities {

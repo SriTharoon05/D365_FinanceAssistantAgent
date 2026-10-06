@@ -1,11 +1,58 @@
 """Entra OAuth client credentials with a server-memory-only access token cache."""
 
 import asyncio
+import math
+import re
 import time
 
 import httpx
 
 from .errors import D365AuthenticationError
+
+OAUTH_ERROR_CODES = frozenset(
+    {
+        "invalid_request",
+        "invalid_client",
+        "invalid_grant",
+        "unauthorized_client",
+        "unsupported_grant_type",
+        "invalid_scope",
+        "access_denied",
+        "server_error",
+        "temporarily_unavailable",
+        "interaction_required",
+        "consent_required",
+    }
+)
+
+
+def provider_diagnostic(response):
+    """Extract only standardized codes; never return Entra's descriptive text."""
+    summary = [f"HTTP {response.status_code}"]
+    try:
+        payload = response.json()
+    except ValueError:
+        return "; ".join(summary)
+    if not isinstance(payload, dict):
+        return "; ".join(summary)
+    oauth_code = payload.get("error")
+    if isinstance(oauth_code, str) and oauth_code in OAUTH_ERROR_CODES:
+        summary.append(oauth_code)
+    codes = payload.get("error_codes")
+    aadsts_code = (
+        next((code for code in codes if type(code) is int and 10000 <= code <= 99999999), None)
+        if isinstance(codes, list)
+        else None
+    )
+    if aadsts_code is None:
+        description = payload.get("error_description")
+        match = (
+            re.search(r"\bAADSTS(\d{5,8})\b", description[:10000]) if isinstance(description, str) else None
+        )
+        aadsts_code = int(match.group(1)) if match else None
+    if aadsts_code is not None:
+        summary.append(f"AADSTS{aadsts_code}")
+    return "; ".join(summary)
 
 
 class D365AuthManager:
@@ -45,17 +92,41 @@ class D365AuthManager:
                     },
                 )
                 if response.status_code != 200:
-                    raise D365AuthenticationError()
+                    raise D365AuthenticationError(
+                        f"Microsoft Entra rejected Dynamics 365 authentication ({provider_diagnostic(response)}). "
+                        "Check the tenant, client ID, client secret, and application access."
+                    )
                 token = response.json()
+                if not isinstance(token, dict):
+                    raise D365AuthenticationError(
+                        "Microsoft Entra returned an invalid OAuth token response (HTTP 200). Reconnect and check the identity endpoint."
+                    )
                 access_token = token.get("access_token")
                 expires_in = float(token.get("expires_in", 3600))
-                if not isinstance(access_token, str) or not access_token or expires_in <= 0:
-                    raise D365AuthenticationError()
+                if (
+                    not isinstance(access_token, str)
+                    or not access_token
+                    or not math.isfinite(expires_in)
+                    or expires_in <= 0
+                ):
+                    raise D365AuthenticationError(
+                        "Microsoft Entra returned an invalid OAuth token response (HTTP 200). Reconnect and check the identity endpoint."
+                    )
                 self._token = access_token
                 self._expires_at = time.monotonic() + expires_in
                 return access_token
-            except (httpx.HTTPError, ValueError, TypeError):
-                raise D365AuthenticationError() from None
+            except httpx.TimeoutException:
+                raise D365AuthenticationError(
+                    "Microsoft Entra authentication timed out. Check outbound HTTPS access to login.microsoftonline.com and try reconnecting."
+                ) from None
+            except httpx.HTTPError:
+                raise D365AuthenticationError(
+                    "Microsoft Entra authentication could not reach login.microsoftonline.com. Check network, proxy, and TLS settings before reconnecting."
+                ) from None
+            except (ValueError, TypeError):
+                raise D365AuthenticationError(
+                    "Microsoft Entra returned an invalid OAuth token response. Reconnect and check the identity endpoint."
+                ) from None
 
     def clear(self):
         self._token = None

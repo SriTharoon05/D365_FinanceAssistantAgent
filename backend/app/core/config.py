@@ -43,6 +43,7 @@ class Settings(BaseSettings):
     d365_mock_mode: bool = False
     d365_write_actions_enabled: bool = True
     d365_timeout_seconds: float = Field(default=30, gt=0, le=120)
+    d365_connection_timeout_seconds: float = Field(default=60, gt=0, le=300)
     d365_max_retries: int = Field(default=2, ge=0, le=4)
 
     azure_openai_endpoint: str = "https://voiceagentdemo-resource.cognitiveservices.azure.com/"

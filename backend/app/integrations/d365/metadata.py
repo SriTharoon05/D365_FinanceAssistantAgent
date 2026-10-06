@@ -1,10 +1,16 @@
 """Namespace-independent metadata parsing and deterministic capability selection."""
 
+import asyncio
 import re
 from dataclasses import dataclass, field
 from xml.etree import ElementTree
 
 from app.core.errors import AppError
+
+MAX_AUTO_PROBES = 3
+PROBE_TIMEOUT_SECONDS = 5.0
+SKIPPABLE_PROBE_ERRORS = {"D365_ENTITY_UNAVAILABLE", "D365_VALIDATION_ERROR", "D365_PERMISSION_ERROR"}
+
 
 FIELD_ALIASES = {
     "company": ("dataAreaId", "DataAreaId", "LegalEntityId", "Company"),
@@ -198,10 +204,12 @@ class D365MetadataResolver:
             score -= 25
         return score
 
-    async def load(self):
+    async def load(self, on_stage=None):
         response = await self.client.request("GET", "$metadata")
         self.parse(response.text)
         self.registry.messages = []
+        if on_stage is not None:
+            on_stage("discovering_entities")
         for role in ("customer_transactions", "open_transactions"):
             setting = getattr(self.settings, "d365_" + role + "_entity", "auto")
             ranked = sorted(
@@ -220,17 +228,36 @@ class D365MetadataResolver:
                 if setting != "auto"
                 else [candidate["entity"] for candidate in candidates if candidate["score"] >= 45]
             )
+            limited = setting == "auto" and len(chosen) > MAX_AUTO_PROBES
+            if setting == "auto":
+                chosen = chosen[:MAX_AUTO_PROBES]
             for name in chosen:
                 info = self.registry.entities.get(name)
                 if info is None or self.score(info, role) <= 0:
                     continue
                 try:
-                    await self.client.get(name, top=1)
-                except AppError:
+                    async with asyncio.timeout(PROBE_TIMEOUT_SECONDS):
+                        await self.client.get(name, top=1, retry_reads=False)
+                except TimeoutError:
+                    self.registry.messages.append(
+                        f"The {name} entity probe exceeded {PROBE_TIMEOUT_SECONDS:g} seconds. "
+                        f"It was skipped while checking {role.replace('_', ' ')}; reconnect or set "
+                        f"D365_{role.upper()}_ENTITY to a verified entity."
+                    )
+                    continue
+                except AppError as exc:
+                    if exc.code not in SKIPPABLE_PROBE_ERRORS:
+                        raise
                     continue
                 self.registry.resolved[role] = name
                 break
             if not self.registry.resolved[role]:
+                if limited:
+                    self.registry.messages.append(
+                        f"Automatic {role.replace('_', ' ')} discovery checked only the top "
+                        f"{MAX_AUTO_PROBES} candidates to keep connection setup bounded. Inspect "
+                        f"diagnostics and set D365_{role.upper()}_ENTITY for another verified candidate."
+                    )
                 self.registry.messages.append(
                     f"{role.replace('_', ' ').capitalize()} unavailable. Inspect entity diagnostics and set D365_{role.upper()}_ENTITY to a public entity with matching company, customer, currency, and amount fields."
                 )

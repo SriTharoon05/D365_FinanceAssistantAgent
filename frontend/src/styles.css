@@ -2307,3 +2307,10 @@ input[type='range'] {
   font-size: 10px;
   margin-top: 5px;
 }
+
+.connection-progress {
+  display: block;
+  margin-top: 5px;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}

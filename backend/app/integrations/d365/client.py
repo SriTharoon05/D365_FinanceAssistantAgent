@@ -62,7 +62,7 @@ class D365ODataClient:
             )
         return url
 
-    async def request(self, method, path, *, params=None, payload=None):
+    async def request(self, method, path, *, params=None, payload=None, retry_reads=True):
         url = self._safe_url(path)
         method = method.upper()
         retries, refreshed, force_refresh = 0, False, False
@@ -118,6 +118,7 @@ class D365ODataClient:
                 continue
             if (
                 method == "GET"
+                and retry_reads
                 and (response.status_code == 429 or response.status_code >= 500)
                 and retries < getattr(self.settings, "d365_max_retries", 2)
             ):
@@ -151,7 +152,7 @@ class D365ODataClient:
         if self.on_failure:
             self.on_failure(message)
 
-    async def get(self, entity, *, filter=None, select=None, top=None, cross_company=False):
+    async def get(self, entity, *, filter=None, select=None, top=None, cross_company=False, retry_reads=True):
         if not IDENTIFIER.fullmatch(entity):
             raise ValueError("Invalid entity collection")
         params = {}
@@ -172,7 +173,7 @@ class D365ODataClient:
                     status_code=502,
                 )
             seen.add(next_path)
-            response = await self.request("GET", next_path, params=params)
+            response = await self.request("GET", next_path, params=params, retry_reads=retry_reads)
             try:
                 body = response.json()
                 page = body["value"]

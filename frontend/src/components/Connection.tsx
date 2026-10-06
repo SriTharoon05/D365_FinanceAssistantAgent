@@ -1,5 +1,6 @@
 import { AlertTriangle, CircleCheck, RefreshCw, WifiOff } from 'lucide-react';
 import type { IntegrationStatus } from '../types';
+import { connectionProgress, connectionTiming } from '../lib/integration';
 export function ConnectionBadge({
   status,
   onClick,
@@ -31,8 +32,9 @@ export function ConnectionBanner({
   onReconnect: () => void;
   isReconnecting: boolean;
 }) {
-  if (!status || status.status === 'connected') return null;
-  const isBusy = isReconnecting || ['connecting', 'reconnecting'].includes(status.status);
+  if (!status || (status.status === 'connected' && !isReconnecting)) return null;
+  const reconnecting = isReconnecting || status.status === 'reconnecting';
+  const isBusy = reconnecting || status.status === 'connecting';
   return (
     <div className={`connection-banner ${status.status}`} role="status">
       {isBusy ? (
@@ -44,20 +46,27 @@ export function ConnectionBanner({
       )}
       <div>
         <strong>
-          {isBusy
-            ? 'Connecting to Dynamics 365'
-            : status.status === 'degraded'
-              ? 'Some finance capabilities are unavailable'
-              : 'Dynamics 365 is disconnected'}
+          {reconnecting
+            ? 'Reconnecting to Dynamics 365'
+            : isBusy
+              ? 'Connecting to Dynamics 365'
+              : status.status === 'degraded'
+                ? 'Some finance capabilities are unavailable'
+                : 'Dynamics 365 is disconnected'}
         </strong>
         <p>
           {status.last_error_summary ||
-            'Live finance data is unavailable. Your saved conversations remain accessible.'}
+            (isBusy
+              ? `${connectionProgress(status)} Your saved conversations remain accessible.`
+              : 'Live finance data is unavailable. Your saved conversations remain accessible.')}
         </p>
+        {isBusy && connectionTiming(status) && (
+          <small className="connection-progress">{connectionTiming(status)}</small>
+        )}
       </div>
       <button className="button small secondary" onClick={onReconnect} disabled={isBusy}>
         <RefreshCw size={14} />
-        {isBusy ? 'Reconnecting…' : 'Reconnect'}
+        {reconnecting ? 'Reconnecting…' : isBusy ? 'Connecting…' : 'Reconnect'}
       </button>
     </div>
   );

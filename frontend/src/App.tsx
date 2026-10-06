@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import type { Conversation, EvidenceRecord, IntegrationStatus } from './types';
 import { endpoints } from './lib/api';
+import { integrationPollInterval } from './lib/integration';
 import { usePreferences } from './hooks/usePreferences';
 import { useSpeech } from './hooks/useSpeech';
 import { useChatStream } from './hooks/useChatStream';
@@ -67,7 +68,7 @@ export default function App() {
   const status = useQuery({
     queryKey: ['integration'],
     queryFn: endpoints.status,
-    refetchInterval: 30_000,
+    refetchInterval: (query) => integrationPollInterval(query.state.data?.status),
     refetchOnWindowFocus: true,
   });
   const bootstrap = useQuery({
@@ -100,10 +101,12 @@ export default function App() {
       client.setQueryData(['integration'], result);
       void client.invalidateQueries({ queryKey: ['capabilities'] });
       if (result.status === 'connected') notifySuccess('Dynamics 365 connection verified.');
-      else
+      else if (result.status === 'degraded')
+        notifySuccess('Dynamics 365 connected with limited finance capabilities.');
+      else if (result.status === 'disconnected')
         notifyError(
           result.last_error_summary ||
-            'Dynamics 365 is not yet connected. Review the backend configuration.',
+            'Dynamics 365 is not connected. Review the integration status for details.',
         );
     },
     onError: (error) => {

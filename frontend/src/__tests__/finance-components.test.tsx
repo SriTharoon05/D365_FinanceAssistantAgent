@@ -70,6 +70,136 @@ describe('conversation history', () => {
 });
 
 describe('Dynamics 365 connection experience', () => {
+  it('shows metadata progress and a bounded time limit, then exposes the real timeout and reconnect action', async () => {
+    const onReconnect = vi.fn();
+    const loading = {
+      ...connectedStatus,
+      status: 'connecting' as const,
+      connection_stage: 'loading_metadata',
+      connection_elapsed_seconds: 42,
+      connection_timeout_seconds: 60,
+      metadata_loaded: false,
+      last_error_summary: null,
+    };
+    const { rerender } = render(
+      <>
+        <ConnectionBadge status={loading} />
+        <ConnectionBanner status={loading} onReconnect={onReconnect} isReconnecting={false} />
+      </>,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Loading Dynamics 365 OData metadata.');
+    expect(screen.getByText('Elapsed 42s · Time limit 60s')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Connecting…' })).toBeDisabled();
+    const timeoutReason =
+      'The Dynamics 365 connection check timed out after 60 seconds during metadata loading.';
+    const failed = {
+      ...loading,
+      status: 'disconnected' as const,
+      connection_stage: 'failed',
+      connection_elapsed_seconds: 60,
+      last_error_summary: timeoutReason,
+    };
+    rerender(
+      <>
+        <ConnectionBadge status={failed} />
+        <ConnectionBanner status={failed} onReconnect={onReconnect} isReconnecting={false} />
+      </>,
+    );
+
+    expect(screen.getByText(timeoutReason)).toBeVisible();
+    expect(
+      screen.getByRole('button', { name: 'Dynamics 365 disconnected. Open integration settings' }),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole('button', { name: 'Dynamics 365 connected. Open integration settings' }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByText('Elapsed 42s · Time limit 60s')).not.toBeInTheDocument();
+    const reconnect = screen.getByRole('button', { name: 'Reconnect' });
+    expect(reconnect).toBeEnabled();
+    await userEvent.click(reconnect);
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+  });
+
+  it('describes startup authentication as connecting and prevents duplicate attempts', async () => {
+    const onReconnect = vi.fn();
+    render(
+      <ConnectionBanner
+        status={{
+          ...connectedStatus,
+          status: 'connecting',
+          last_error_summary: null,
+          metadata_loaded: false,
+        }}
+        onReconnect={onReconnect}
+        isReconnecting={false}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Connecting to Dynamics 365');
+    expect(
+      screen.getByText(
+        'Verifying Microsoft Entra authentication and available Dynamics 365 finance entities. Your saved conversations remain accessible.',
+      ),
+    ).toBeVisible();
+    const button = screen.getByRole('button', { name: 'Connecting…' });
+    expect(button).toBeDisabled();
+    expect(screen.queryByRole('button', { name: 'Reconnecting…' })).not.toBeInTheDocument();
+    await userEvent.click(button);
+    expect(onReconnect).not.toHaveBeenCalled();
+  });
+
+  it('describes a server-reported reconnection accurately without a local mutation', () => {
+    render(
+      <ConnectionBanner
+        status={{ ...connectedStatus, status: 'reconnecting', last_error_summary: null }}
+        onReconnect={vi.fn()}
+        isReconnecting={false}
+      />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to Dynamics 365');
+    expect(screen.getByRole('button', { name: 'Reconnecting…' })).toBeDisabled();
+    expect(screen.queryByText('Connecting to Dynamics 365')).not.toBeInTheDocument();
+  });
+
+  it('keeps a pending reconnect visible until its request completes even if a health check reports connected', () => {
+    const onReconnect = vi.fn();
+    const { rerender } = render(
+      <ConnectionBanner status={connectedStatus} onReconnect={onReconnect} isReconnecting />,
+    );
+
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to Dynamics 365');
+    expect(screen.getByRole('button', { name: 'Reconnecting…' })).toBeDisabled();
+    rerender(
+      <ConnectionBanner
+        status={connectedStatus}
+        onReconnect={onReconnect}
+        isReconnecting={false}
+      />,
+    );
+    expect(screen.queryByRole('status')).not.toBeInTheDocument();
+  });
+
+  it('keeps reporting connecting while server health snapshots remain pending despite a prior success', () => {
+    const connecting = {
+      ...connectedStatus,
+      status: 'connecting' as const,
+      metadata_loaded: false,
+    };
+    const { rerender } = render(<ConnectionBadge status={connecting} />);
+
+    for (const latency_ms of [2000, 30000, 120000]) {
+      rerender(<ConnectionBadge status={{ ...connecting, latency_ms }} />);
+      expect(
+        screen.getByRole('button', { name: 'Dynamics 365 connecting. Open integration settings' }),
+      ).toHaveTextContent('Connecting');
+      expect(
+        screen.queryByRole('button', { name: 'Dynamics 365 connected. Open integration settings' }),
+      ).not.toBeInTheDocument();
+    }
+  });
+
   it('shows the disconnected reason and offers reconnect without blocking saved history', async () => {
     const onReconnect = vi.fn();
     render(
@@ -89,8 +219,9 @@ describe('Dynamics 365 connection experience', () => {
 
   it('disables duplicate reconnect attempts while reconnecting', () => {
     render(<ConnectionBanner status={unavailableStatus} onReconnect={vi.fn()} isReconnecting />);
-    expect(screen.getByRole('status')).toHaveTextContent('Connecting to Dynamics 365');
+    expect(screen.getByRole('status')).toHaveTextContent('Reconnecting to Dynamics 365');
     expect(screen.getByRole('button', { name: 'Reconnecting…' })).toBeDisabled();
+    expect(screen.getByText(unavailableStatus.last_error_summary!)).toBeVisible();
   });
 
   it('makes connection status readable without depending on color', () => {

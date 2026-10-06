@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import type { Capabilities, IntegrationStatus, Preferences } from '../types';
 import { endpoints, exportConversation } from '../lib/api';
+import { connectionProgress, connectionTiming } from '../lib/integration';
 import { displayValue, formatDate, label } from '../lib/format';
 import { Modal, Spinner } from './ui';
 import { ConnectionBadge } from './Connection';
@@ -77,6 +78,8 @@ export function Settings({
   const [tab, setTab] = useState('general');
   const [clearConfirm, setClearConfirm] = useState(false);
   const [clearing, setClearing] = useState(false);
+  const isReconnecting = reconnecting || status?.status === 'reconnecting';
+  const connectionBusy = isReconnecting || status?.status === 'connecting';
   const audit = useQuery({
     queryKey: ['audit'],
     queryFn: endpoints.audit,
@@ -273,9 +276,17 @@ export function Settings({
               {status?.last_error_summary && (
                 <p className="settings-callout warning">{status.last_error_summary}</p>
               )}
-              <button className="button secondary" onClick={onReconnect} disabled={reconnecting}>
-                {reconnecting ? (
-                  <Spinner label="Reconnecting…" />
+              {connectionBusy && status && (
+                <div className="settings-callout" role="status">
+                  {connectionProgress(status)}
+                  {connectionTiming(status) && (
+                    <small className="connection-progress">{connectionTiming(status)}</small>
+                  )}
+                </div>
+              )}
+              <button className="button secondary" onClick={onReconnect} disabled={connectionBusy}>
+                {connectionBusy ? (
+                  <Spinner label={isReconnecting ? 'Reconnecting…' : 'Connecting…'} />
                 ) : (
                   <>
                     <RefreshCw size={15} />

@@ -212,6 +212,7 @@ Treat this value as a secret. Changing it invalidates existing signed browser se
 | `D365_MOCK_MODE` | `false`; opt into synthetic data with `true`. |
 | `D365_WRITE_ACTIONS_ENABLED` | `true`; set `false` to remove supported mutation tools from the assistant. Confirmation remains required when enabled. |
 | `D365_TIMEOUT_SECONDS` | `30`; request timeout. |
+| `D365_CONNECTION_TIMEOUT_SECONDS` | `60`; overall connection/reconnect budget across authentication, customer health check, metadata and capability discovery. Must be greater than `0` and no more than `300` seconds. |
 | `D365_MAX_RETRIES` | `2`; bounded transient read retry policy. |
 | `D365_DELETE_ALLOWED_PREFIXES` | `TEST-,DEMO-,CHAT-`; restrict test-customer deletion. |
 | `D365_PAYMENT_JOURNAL_NAME` | `CustPay`; customer payment journal configuration. |
@@ -284,20 +285,22 @@ The scope follows `D365_BASE_URL` when you configure another environment. The En
 
 Tokens are cached only in backend memory and refreshed before expiry. A D365 401 forces one refresh and one retry; repeated failure is reported as disconnected. Do not use personal passwords or send the client secret from the browser.
 
-After entering credentials and restarting the backend:
+After entering credentials and restarting the backend, keep Uvicorn running while you verify the connection:
 
 1. Open the frontend and click **Reconnect** in the D365 header or settings.
 2. Inspect `GET /api/integrations/d365/status` in Swagger or the browser network tools.
 3. Confirm a successful connection and inspect the resolved capabilities before asking for balances or offering writes.
 4. Use entity diagnostics if transaction discovery is unavailable.
 
-The status includes non-secret health information such as company, last success, error summary, metadata readiness, capabilities and latency. The frontend refreshes status periodically and when focus returns. Missing configuration or lost connectivity must never turn into an invented financial answer. Saved conversations remain viewable while ERP access is disconnected.
+The status includes non-secret health information such as company, last success, error summary, metadata readiness, capabilities and latency. It also reports `connection_stage`, `connection_elapsed_seconds` and `connection_timeout_seconds` so you can identify which part of the current or most recent attempt was reached. HTTP 200 from this local status route does not establish a successful D365 token or ERP read; inspect the JSON `status` and capabilities. The frontend refreshes status periodically and when focus returns. Missing configuration or lost connectivity must never turn into an invented financial answer. Saved conversations remain viewable while ERP access is disconnected.
+
+A connection attempt has one overall deadline, configured by `D365_CONNECTION_TIMEOUT_SECONDS=60` by default. It ends in a reported failure when that budget expires rather than remaining indefinitely in Connecting. A repeated reconnect request during an active attempt returns its current status instead of queuing another attempt or restarting the deadline.
 
 API calls use a signed local session cookie. An API client should retain cookies across requests, just as the browser does. Swagger is convenient for inspecting schemas and trying endpoints on your local machine; this local cookie is not an enterprise authentication system.
 
 ## Metadata and transaction entity discovery
 
-Reconnect loads `GET /data/$metadata`, parses public entity sets and their fields, and evaluates candidates for customer transactions and open transactions. Deterministic scoring uses semantic field coverage: customer account, invoice/reference, transaction/due dates, currency, amount, remaining balance, voucher and company. The selected candidate is tested with a safe `$top=1` read rather than trusted from its name alone.
+Reconnect authenticates, checks the configured customer entity with a safe read, loads `GET /data/$metadata`, parses public entity sets and their fields, and evaluates candidates for customer transactions and open transactions. Deterministic scoring uses semantic field coverage: customer account, invoice/reference, transaction/due dates, currency, amount, remaining balance, voucher and company. Candidates are tested with safe `$top=1` reads rather than trusted from their names alone. Discovery probes at most three candidates per role; each probe has a five-second limit and no transient retries, within the overall connection budget. Probe timeouts and unavailable/bounded-discovery explanations appear in capability/entity diagnostics. These discovery bounds do not change the normal finance-read retry policy.
 
 Names differ across D365 environments. The resolver must not infer a current open balance solely from an original invoice amount. When a reliable remaining-balance source is unavailable, balance/overdue capabilities are unavailable and the app explains the limitation. Other verified features can remain available.
 
@@ -478,17 +481,73 @@ The HTTP layer never blindly retries an ambiguous financial write. If the networ
 
 ## Troubleshooting
 
+### D365 stays Connecting or Reconnecting
+
+Leave the terminal running Uvicorn open. In a **second PowerShell window**, inspect the local backend:
+
+```powershell
+$Status = Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/integrations/d365/status" -TimeoutSec 10
+$Status | ConvertTo-Json -Depth 8
+```
+
+The JSON contains non-secret diagnostics. Interpret its `status`, not just the HTTP response:
+
+| Observation | Meaning / next check |
+| --- | --- |
+| HTTP 200 with `connecting` or `reconnecting` | The local API is running; the D365 attempt is still in progress. Inspect the stage and elapsed time. |
+| `connected` with `mock_mode=false` | Authentication and required safe connection checks succeeded. Inspect capability availability for the requested workflow. |
+| `degraded` | Some verified ERP access works, but a transaction capability is unavailable; inspect entity diagnostics. |
+| `disconnected` | Read `last_error_summary` and the stage; fix that prerequisite before retrying. |
+| “Unable to connect to the remote server” for `localhost:8000` | The local API could not be reached. Check that Uvicorn is still running on port 8000. If you stopped it with Ctrl+C, start it again in the first window before repeating this command. This result does not diagnose the D365 credentials. |
+
+With `mock_mode=true`, Connected describes only the isolated mock adapter; no live authentication occurs. For a live attempt, `connection_stage` progresses through `authenticating`, `checking_customers`, `loading_metadata` and `discovering_entities`, then reaches `ready` or `failed`. `connection_elapsed_seconds` shows the attempt duration, and `connection_timeout_seconds` shows its overall budget. With the default setting, a connection attempt must finish or fail within approximately 60 seconds; timeout diagnostics identify the stage reached. Do not repeatedly click Reconnect: overlapping requests are coalesced and do not create a new deadline.
+
+In the Uvicorn terminal, look for structured `d365_connection_stage` and `d365_connection_finished` events. They report the stage/status, elapsed time and a safe error code or exception type without provider bodies, authorization headers or credentials. These observations distinguish authentication, ERP permissions, network and discovery failures. A reachable local API with a failing ERP connection is not evidence that Python 3.13.3 failed, and no particular tenant cause can be inferred from Connecting alone.
+
+### Check credential configuration without displaying values
+
+The required backend variables are `D365_TENANT_ID`, `D365_CLIENT_ID` and `D365_CLIENT_SECRET`. From the second PowerShell window, change to your checkout's **`backend/`** directory and print their presence only:
+
+```powershell
+@'
+from app.core.config import Settings
+
+try:
+    settings = Settings()
+except Exception:
+    print("Settings could not load. Check backend .env syntax and endpoint configuration.")
+    raise SystemExit(1)
+
+for name in ("D365_TENANT_ID", "D365_CLIENT_ID", "D365_CLIENT_SECRET"):
+    present = bool(getattr(settings, name.lower()).strip())
+    print(name, "configured" if present else "missing")
+'@ | .\.venv\Scripts\python.exe -
+```
+
+This checks the current `.env` and that terminal's environment; it does not validate a secret or prove that the running backend loaded the same values. Environment variables override `.env`, and variables set only in the original PowerShell window may differ from the second window. Never print the environment, `.env` contents, secret values or tokens while troubleshooting.
+
+After editing credentials or connection settings, **restart Uvicorn** in the first window so it loads the new configuration, leave it running, then inspect status and reconnect from the frontend. A reconnect refreshes authentication and metadata using the settings already loaded by that backend process; it does not reload edited `.env` files. Live failures remain live failures; the app never automatically switches to mock data. Use `-Mock` only when you explicitly want an isolated demonstration.
+
 ### D365 401 or token failure
 
-Check tenant/client identifiers, secret validity/expiry and the base URL/scope. A 401 triggers one backend token refresh and retry. Click Reconnect after correcting configuration; repeated failure stays disconnected. A login token for a different resource cannot be reused as a D365 token.
+Check the status/error summary for a safely retained Microsoft Entra `AADSTS` code when the provider supplies one. For example, `AADSTS7000215` can indicate an invalid client secret, `AADSTS7000222` an expired secret, and `AADSTS700016` an application/tenant mismatch. Use the actual reported code to guide the check; these examples do not establish the cause in your tenant. Configure the client secret **Value**, not its identifier, without displaying either in diagnostic output.
+
+Check tenant/client identifiers, secret validity/expiry and the base URL/scope. A D365 401 triggers one backend token refresh and retry. Correct configuration, restart the backend if values changed, then click Reconnect; repeated failure stays disconnected. A token for a different resource cannot be reused as a D365 token. Local/mock tests do not verify your live Entra credentials.
 
 ### D365 403 or permission failure
 
-Verify the service principal's Entra mapping inside D365, the mapped user's roles, legal entity access and entity permissions. Metadata can be readable while a specific data entity is forbidden. Do not grant unnecessarily broad administrative access just to make a check pass.
+Verify the application/client ID is mapped to the intended active user in **System administration → Setup → Microsoft Entra applications** inside D365. Check that user's roles, `USMF` (or your configured legal entity) access and permissions for the configured data entities. A successful Entra token does not prove that the D365 mapping is correct. Metadata can be readable while a specific customer or transaction entity is forbidden. Do not grant unnecessarily broad administrative access just to make a check pass.
 
 ### Missing entity or unavailable balance capability
 
-Inspect diagnostics and your tenant's `$metadata`. Correct collection names or configure verified transaction entity overrides. A selected entity must expose the required fields and support a safe read. Do not use invoice original amount as a substitute for remaining/open balance. Restart/reconnect after changing `.env`.
+After metadata loads, inspect diagnostics from the second PowerShell window. Retain cookies in a local diagnostic session:
+
+```powershell
+$Diagnostics = Invoke-RestMethod -Method Get -Uri "http://localhost:8000/api/integrations/d365/diagnostics/entities" -SessionVariable FinanceDiagnosticsSession -TimeoutSec 10
+$Diagnostics | ConvertTo-Json -Depth 12
+```
+
+Review `candidates`, `resolved_entities` and `messages` in the entity-diagnostics response, and `capabilities.diagnostics` in the status response. Discovery examines only the bounded top candidates rather than every public set, so a missing automatic selection needs inspection, not an invented entity name. Confirm a suitable set exists in your tenant's `$metadata` and exposes the required customer/company/currency/amount fields. Use the verified overrides `D365_CUSTOMER_TRANSACTIONS_ENTITY` and `D365_OPEN_TRANSACTIONS_ENTITY` in `backend/.env` when appropriate. A selected entity must support a safe read for the mapped D365 user. Do not use invoice original amount as a substitute for remaining/open balance. Restart the backend and reconnect after changing `.env`.
 
 ### Rate limits or D365 5xx
 
@@ -496,7 +555,16 @@ Read requests use limited retries and respect retry guidance. Wait before retryi
 
 ### Network failure or timeout
 
-Check DNS, outbound HTTPS, proxy settings and reachability for `login.microsoftonline.com`, the configured D365 host and the Azure endpoint. Check configured timeouts and tenant health. Retain TLS verification. The frontend stays usable for history when ERP access is disconnected.
+From a second PowerShell window, check the Microsoft login host and your configured D365 hostname:
+
+```powershell
+Test-NetConnection login.microsoftonline.com -Port 443
+Test-NetConnection org1a43c536.operations.dynamics.com -Port 443
+```
+
+Replace the second hostname if you changed `D365_BASE_URL`. These commands check DNS/TCP reachability only; success does not validate TLS, authentication or ERP permissions. If they fail, inspect local/corporate network and proxy rules before retrying. If TCP works but the app reports a TLS/proxy or HTTP failure, use the safe stage/error diagnostics in the backend logs. Retain TLS verification.
+
+`D365_TIMEOUT_SECONDS` controls normal request timeouts; `D365_CONNECTION_TIMEOUT_SECONDS` caps the complete connection attempt. Increasing the overall limit is an explicit configuration change, not proof that authentication or permissions are correct. Restart the backend after changing it. The frontend stays usable for saved history while ERP access is disconnected. Azure OpenAI connectivity is a separate dependency and is checked under its own troubleshooting entry.
 
 ### Azure OpenAI unavailable
 

@@ -227,3 +227,105 @@ async def test_401_then_429_only_refreshes_token_once(settings, monkeypatch):
         await client.get("CustomersV3")
         assert len(token_calls) == 2
         assert len(reads) == 3
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", [429, 503])
+async def test_read_retry_can_be_disabled_for_connection_probes(settings, monkeypatch, status):
+    calls = []
+
+    async def sleep(delay):
+        raise AssertionError("Retries were disabled")
+
+    monkeypatch.setattr("app.integrations.d365.client.asyncio.sleep", sleep)
+
+    def transport(request):
+        if request.url.host == "login.microsoftonline.com":
+            return token_response()
+        calls.append(request)
+        return httpx.Response(status, headers={"Retry-After": "30"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        client = D365ODataClient(settings, D365AuthManager(settings, http), http)
+        with pytest.raises(AppError):
+            await client.get("CustomersV3", top=1, retry_reads=False)
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "payload",
+    [
+        None,
+        [],
+        "not-a-token-object",
+        {},
+        {"access_token": "test-token", "expires_in": None},
+        {"access_token": "test-token", "expires_in": "NaN"},
+    ],
+)
+async def test_malformed_oauth_response_is_structured_without_echoing_payload(settings, payload):
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    ) as http:
+        auth = D365AuthManager(settings, http)
+        with pytest.raises(AppError) as error:
+            await auth.get_token()
+        assert error.value.code == "D365_AUTHENTICATION_ERROR"
+        assert "invalid OAuth token response" in error.value.message
+        assert "test-token" not in error.value.message
+        assert auth._token is None
+
+
+@pytest.mark.asyncio
+async def test_oauth_diagnostic_exposes_only_status_and_standard_codes(settings):
+    secret = "this-is-the-client-secret"
+    body = {
+        "error": "invalid_client",
+        "error_description": f"AADSTS7000215: secret {secret} client-id sensitive-identifier",
+        "error_codes": [7000215],
+        "access_token": "sensitive-token",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(400, json=body))
+    ) as http:
+        auth = D365AuthManager(settings, http)
+        with pytest.raises(AppError) as error:
+            await auth.get_token()
+        message = error.value.message
+        assert "HTTP 400" in message
+        assert "invalid_client" in message
+        assert "AADSTS7000215" in message
+        assert all(value not in message for value in (secret, "sensitive-identifier", "sensitive-token"))
+
+
+@pytest.mark.asyncio
+async def test_unknown_oauth_error_and_description_are_redacted(settings):
+    body = {
+        "error": "my-secret-code",
+        "error_description": "AADSTS700016: private tenant context and a secret",
+    }
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(lambda request: httpx.Response(401, json=body))
+    ) as http:
+        with pytest.raises(AppError) as error:
+            await D365AuthManager(settings, http).get_token()
+        assert "AADSTS700016" in error.value.message
+        assert "my-secret-code" not in error.value.message
+        assert "private tenant context" not in error.value.message
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "exception_type,expected", [(httpx.ReadTimeout, "timed out"), (httpx.ConnectError, "could not reach")]
+)
+async def test_oauth_network_errors_have_safe_specific_diagnostics(settings, exception_type, expected):
+    def transport(request):
+        raise exception_type("secret-text-in-provider-exception", request=request)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as http:
+        with pytest.raises(AppError) as error:
+            await D365AuthManager(settings, http).get_token()
+        assert expected in error.value.message
+        assert "login.microsoftonline.com" in error.value.message
+        assert "secret-text" not in error.value.message
