@@ -486,8 +486,14 @@ def typed_provider(client=None, config=None):
         },
         "PaymentTerms": {"dataAreaId": "Edm.String", "Name": "Edm.String"},
     }
+    keys = {
+        "CDSFreeTextInvoiceHeaders": ["dataAreaId", "ExternalInvoiceId"],
+        "CDSFreeTextInvoiceLines": ["dataAreaId", "ExternalInvoiceId", "LineNumber"],
+        "CustomerPaymentJournalHeaders": ["dataAreaId", "JournalBatchNumber"],
+        "CustomerPaymentJournalLines": ["dataAreaId", "JournalBatchNumber", "LineNumber"],
+    }
     for entity, fields in definitions.items():
-        resolver.registry.entities[entity] = EntityInfo(entity, entity, fields)
+        resolver.registry.entities[entity] = EntityInfo(entity, entity, fields, keys.get(entity, []))
     return LiveD365Provider(config, client, resolver.registry)
 
 
@@ -771,3 +777,127 @@ async def test_created_draft_verification_returns_exact_header_without_broad_his
     assert result["invoice"]["source_entity"] == "CDSFreeTextInvoiceHeaders"
     assert result["invoice"]["is_posted"] is False
     assert verified_lines == [(data, COMPANY)]
+
+
+@pytest.mark.asyncio
+async def test_explicit_draft_due_date_update_validates_actual_header_keys_without_writing():
+    client = SetupClient()
+    provider = typed_provider(client)
+    header, _ = provider.invoice_payloads(invoice_data(), COMPANY)
+    header.update({"ExternalInvoiceId": "TEST-INV-001", "DueDate": "2026-10-31T00:00:00Z", "IsPosted": "No"})
+    client.records["CDSFreeTextInvoiceHeaders"] = [header]
+
+    state = await provider.validate_mutation(
+        "update_draft_free_text_invoice",
+        {"identifier": "TEST-INV-001", "due_date": "2026-11-15"},
+        COMPANY,
+    )
+
+    info = provider.registry.entities["CDSFreeTextInvoiceHeaders"]
+    assert state == {"identifier": "TEST-INV-001", "is_posted": False, "due_date": "2026-10-31"}
+    assert info.keys == ["dataAreaId", "ExternalInvoiceId"]
+    assert (
+        provider.key(info, header)
+        == f"CDSFreeTextInvoiceHeaders(dataAreaId='{COMPANY}',ExternalInvoiceId='TEST-INV-001')"
+    )
+    assert provider.wire_value(info, "DueDate", "2026-11-15") == "2026-11-15T00:00:00Z"
+    assert header["DueDate"] == "2026-10-31T00:00:00Z"
+    assert client.calls == [
+        (
+            "CDSFreeTextInvoiceHeaders",
+            {
+                "filter": f"dataAreaId eq '{COMPANY}' and (ExternalInvoiceId eq 'TEST-INV-001')",
+                "top": 2,
+                "cross_company": True,
+            },
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_explicit_payment_line_request_validates_actual_company_setup_and_duplicate_checks_without_writing():
+    client = SetupClient()
+    provider = typed_provider(client)
+    namespace = "Microsoft.Dynamics.DataEntities"
+    additional_fields = {
+        "BankAccounts": {
+            "dataAreaId": "Edm.String",
+            "BankAccountId": "Edm.String",
+            "BankAccountStatus": f"{namespace}.BankAccountHoldStatus",
+        },
+        "CustomerPaymentMethods": {"dataAreaId": "Edm.String", "Name": "Edm.String"},
+        "CustomerPostingProfiles": {"dataAreaId": "Edm.String", "PostingProfile": "Edm.String"},
+    }
+    for entity, fields in additional_fields.items():
+        provider.registry.entities[entity] = EntityInfo(entity, entity, fields)
+    client.records.update(
+        {
+            "CustomersV3": [{**CUSTOMER, "CustomerAccount": "TEST-CHAT-002", "SalesCurrencyCode": "INR"}],
+            "CustomerPaymentJournalHeaders": [
+                {
+                    "dataAreaId": COMPANY,
+                    "JournalBatchNumber": "25135",
+                    "JournalName": "CustPay",
+                    "IsPosted": f"{namespace}.NoYes'No'",
+                }
+            ],
+            "BankAccounts": [
+                {
+                    "dataAreaId": COMPANY,
+                    "BankAccountId": provider.settings.d365_payment_bank_account,
+                    "BankAccountStatus": f"{namespace}.BankAccountHoldStatus'ActiveForAllTransactions'",
+                }
+            ],
+            "CustomerPaymentMethods": [
+                {"dataAreaId": COMPANY, "Name": provider.settings.d365_payment_method}
+            ],
+            "CustomerPostingProfiles": [
+                {"dataAreaId": COMPANY, "PostingProfile": provider.settings.d365_customer_posting_profile}
+            ],
+            "CustomerPaymentJournalLines": [],
+        }
+    )
+    data = {
+        "journal_number": "25135",
+        "line_number": 1,
+        "account": "TEST-CHAT-002",
+        "currency": "INR",
+        "amount": "100",
+        "payment_date": "2026-10-06",
+        "reference": "TEST-PAY-001",
+    }
+
+    state = await provider.validate_mutation("add_customer_payment_line", data, COMPANY)
+
+    assert state["journal_number"] == "25135"
+    assert state["is_posted"] is False
+    line = state["proposed_line"]
+    assert line["AccountDisplayValue"] == "TEST\\-CHAT\\-002"
+    assert line["LineNumber"] == "1"
+    assert line["CreditAmount"] == "100"
+    assert line["DebitAmount"] == "0"
+    assert line["TransactionDate"] == "2026-10-06T00:00:00Z"
+    assert line["CurrencyCode"] == "INR"
+    assert line["PaymentReference"] == "TEST-PAY-001"
+    assert line["AccountType"] == "Cust"
+    setup_filters = {
+        entity: kwargs["filter"]
+        for entity, kwargs in client.calls
+        if entity in additional_fields or entity == "JournalNames"
+    }
+    assert "Name eq 'CustPay'" in setup_filters["JournalNames"]
+    assert (
+        f"BankAccountId eq '{provider.settings.d365_payment_bank_account}'" in setup_filters["BankAccounts"]
+    )
+    assert f"Name eq '{provider.settings.d365_payment_method}'" in setup_filters["CustomerPaymentMethods"]
+    assert (
+        f"PostingProfile eq '{provider.settings.d365_customer_posting_profile}'"
+        in setup_filters["CustomerPostingProfiles"]
+    )
+    duplicate_queries = [
+        kwargs["filter"] for entity, kwargs in client.calls if entity == "CustomerPaymentJournalLines"
+    ]
+    assert len(duplicate_queries) == 2
+    assert "JournalBatchNumber eq '25135' and LineNumber eq 1" in duplicate_queries[0]
+    assert "PaymentReference eq 'TEST-PAY-001'" in duplicate_queries[1]
+    assert all(kwargs.get("cross_company") is True for _, kwargs in client.calls)

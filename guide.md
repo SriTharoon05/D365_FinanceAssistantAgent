@@ -487,10 +487,14 @@ With live credentials use your real customer identifiers. In mock mode use the s
 - “Delete TEST-ACME-001.”
 - “Check my configured customer payment journal and draft invoice revenue account setup.”
 - “Create a draft INR 5,000 invoice for AST-001 due on 30 October 2026 using the configured revenue account.”
-- “Change the due date of that draft invoice.”
+- “Change TEST-INV-001's due date to 15 November 2026.”
+- “Show invoice details for TEST-INV-001.” Then, in the same conversation: “Change the due date to 15 November 2026.”
 - “Create an unposted customer payment journal, then add a payment line for AST-001.”
+- “Add payment line 1 to journal 25135 for TEST-CHAT-002, amount INR 100, payment date 6 October 2026, reference TEST-PAY-001.”
 
-The assistant asks for clarification when a required field is missing or multiple customers match. For a payment, journal header creation and line addition are separate supported actions; provide the returned journal reference and an explicit line number when adding a line. Reminders are saved drafts only; the application does not send email.
+Use your actual invoice/customer identifiers and the journal number returned by a successful confirmed journal creation; `25135` is an example, not a verified journal in your tenant. Choose an unused line number and payment reference rather than reusing `TEST-PAY-001` after it has been written. Journal header creation and payment-line addition remain separate confirmed actions.
+
+In the same conversation, the latest successfully confirmed journal number can be omitted: “Add payment line 1 for TEST-CHAT-002, amount INR 100, payment date 6 October 2026, reference TEST-PAY-001.” Without a confirmed journal context, the assistant asks for its number. It also asks for missing required fields or clarification when multiple customers match. Complete due-date/payment-line requests still pass fresh record and setup validation before a confirmation is offered, and validation runs again when confirmed. A blocked proposal reports the specific missing field or setup/state problem, such as an unavailable journal, posted invoice, invalid bank account or payment method. Reminders are saved drafts only; the application does not send email. Payment preparation does not automatically settle or post transactions.
 
 For an invoice line, “account” means `MainAccounts.MainAccountId`, written through `MainAccountDisplayValue`. A phrase such as `[verified account]` is a placeholder, not an account number. The read-only `get_write_setup` tool accepts purpose `invoice`, `payment`, `customer` or `all` and returns candidates, source evidence and `configured_default.verified` where a default applies. When an invoice line omits its revenue account, the backend validates `D365_REVENUE_ACCOUNT` in the company's chart of accounts and requires Revenue type, a non-suspended account and manual posting allowed. It does not silently choose a different account. If validation fails, identify an appropriate real account in D365 and supply its ID explicitly or correct the configuration and restart.
 

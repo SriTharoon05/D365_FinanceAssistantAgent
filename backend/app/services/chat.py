@@ -17,6 +17,7 @@ from app.agent.graph import run_live_agent
 from app.agent.grounding import requires_finance_grounding, write_placeholder_help
 from app.agent.mock import parse_date, run_mock_agent
 from app.agent.tools import READ_TOOLS, TOOL_SCHEMAS
+from app.agent.write_routing import resolve_write_request
 from app.core.errors import AppError
 from app.models.entities import Conversation, ConversationSummary, Message, PendingAction, ToolRun
 from app.schemas.finance import MUTATION_SCHEMAS
@@ -131,7 +132,7 @@ class ChatService:
                     )
                 ).all()
             )
-            identifiers = self._identifiers(runs, action_history)
+            identifiers = self._identifiers(runs, action_history, company)
             identifiers["last_user_message"] = next(
                 (item.content for item in reversed(recent) if item.role == "user"), ""
             )
@@ -191,8 +192,18 @@ class ChatService:
             return assistant.id, user.id, company, message, context, identifiers, prior_actions
 
     @staticmethod
-    def _identifiers(runs: list[ToolRun], actions: list[PendingAction]) -> dict[str, Any]:
+    def _identifiers(
+        runs: list[ToolRun], actions: list[PendingAction], company: str | None = None
+    ) -> dict[str, Any]:
         context: dict[str, Any] = {}
+        latest_invoice_at = None
+
+        def created_at(item):
+            stamp = getattr(item, "created_at", None)
+            if stamp is None:
+                return datetime.min.replace(tzinfo=UTC)
+            return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp.astimezone(UTC)
+
         for run in reversed(runs):
             account = (run.safe_input or {}).get("account") or (run.safe_output or {}).get(
                 "customer", {}
@@ -203,11 +214,21 @@ class ChatService:
             if len(customers) == 1:
                 context["account"] = customers[0]["account"]
             if run.tool_name == "get_invoice_details":
-                context["invoice"] = (run.safe_input or {}).get("identifier")
+                invoice_company = (run.safe_output or {}).get("invoice", {}).get("company")
+                if company is None or (
+                    isinstance(invoice_company, str) and invoice_company.casefold() == company.casefold()
+                ):
+                    context["invoice"] = (run.safe_input or {}).get("identifier")
+                    latest_invoice_at = created_at(run)
         for action in reversed(actions):
             if action.proposed_changes.get("account"):
                 context["account"] = action.proposed_changes["account"]
             if action.status != "executed":
+                continue
+            action_company = action.proposed_changes.get("company")
+            if company is not None and (
+                not isinstance(action_company, str) or action_company.casefold() != company.casefold()
+            ):
                 continue
             result = action.result or {}
             result = result.get("result") or result
@@ -217,6 +238,9 @@ class ChatService:
                     or result.get("external_id")
                     or action.proposed_changes.get("external_id")
                 )
+                if latest_invoice_at is None or created_at(action) >= latest_invoice_at:
+                    context["invoice"] = context["draft_invoice"]
+                    latest_invoice_at = created_at(action)
             if action.action_type == "create_customer_payment_journal":
                 context["journal_number"] = (
                     result.get("journal_number")
@@ -416,15 +440,28 @@ class ChatService:
                                 )
                             # General help remains available without handing historical ERP facts to the model.
                             live_context = [HumanMessage(content=message)]
-                        await run_live_agent(
-                            self.settings,
-                            company,
-                            live_context,
-                            execute,
-                            emit,
-                            finance_required=finance_required,
-                            connection_state=connection_state,
-                        )
+                        routed_write = resolve_write_request(message, identifiers)
+                        if routed_write is not None:
+                            if routed_write.clarification:
+                                await emit("message_delta", {"delta": routed_write.clarification})
+                            else:
+                                await execute(routed_write.action_type, routed_write.arguments)
+                                await emit(
+                                    "message_delta",
+                                    {
+                                        "delta": "I prepared the requested change for confirmation. Review the target and proposed values on the action card, then Confirm to apply it."
+                                    },
+                                )
+                        else:
+                            await run_live_agent(
+                                self.settings,
+                                company,
+                                live_context,
+                                execute,
+                                emit,
+                                finance_required=finance_required,
+                                connection_state=connection_state,
+                            )
                     status = "completed"
                 except AppError as exc:
                     status, error_code = "error", exc.code

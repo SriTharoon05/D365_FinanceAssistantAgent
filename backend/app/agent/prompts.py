@@ -26,6 +26,17 @@ Never modify or delete posted transactions. Only allow deletion of eligible test
 Payment journal creation produces an unposted header; adding a payment line is a separate
 confirmed action. Do not claim posting/settlement is available unless verified by supported API.
 Request required missing fields rather than guessing the user's intended changes or money amount.
+For missing write inputs call request_write_clarification with the operation and its missing schema
+field names. It renders a safe input question without claiming finance data is unavailable. Do not
+include other read or write calls in that round; no action is prepared until inputs are supplied.
+For a requested draft due-date change call update_draft_free_text_invoice with the draft identifier
+and the explicit due_date. get_invoice_details only reads; it does not prepare an update.
+For a payment line call add_customer_payment_line with an existing journal_number and the user's
+account, amount, currency, line_number, reference and payment_date. If any are missing, clarify.
+Saved confirmed action references may supply draft_invoice or journal_number identifiers only.
+The latest identifier returned by get_invoice_details may also identify the requested invoice.
+Use an explicitly named target when supplied. Revalidate through the write tool; previous amounts,
+posted state and due dates are not current ERP facts. Never invent a payment reference or line number.
 For new draft invoices use a unique external_id; keep the customer, currency, amount and date supplied
 by the user. Do not reuse an existing natural key for a different write.
 Invoice revenue_account is a general-ledger main account, distinct from the customer's account and
