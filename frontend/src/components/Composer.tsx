@@ -1,5 +1,5 @@
 import { useRef } from 'react';
-import { ArrowUp, Mic, Square, X, LoaderCircle, AudioLines } from 'lucide-react';
+import { ArrowUp, Mic, Square, X, LoaderCircle, AudioLines, Sparkles } from 'lucide-react';
 import type { Capabilities } from '../types';
 import { useRecorder } from '../hooks/useRecorder';
 export function Composer({
@@ -43,50 +43,55 @@ export function Composer({
   return (
     <div className="composer-wrap">
       <div className={`composer ${recorder.state === 'recording' ? 'recording' : ''}`}>
-        {recorder.state === 'idle' ? (
-          <textarea
-            ref={textarea}
-            aria-label="Message Finance Assistant"
-            placeholder="Ask about customers, invoices, or a finance action…"
-            value={value}
-            onChange={(event) => {
-              onChange(event.target.value);
-              event.target.style.height = 'auto';
-              event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
-                event.preventDefault();
-                send();
-              }
-            }}
-            rows={2}
-            disabled={disabled}
-          />
-        ) : (
-          <div className="recording-preview" role="status" aria-live="polite">
-            {recorder.state === 'recording' ? (
-              <>
-                <span className="recording-dot" />
-                <AudioLines className="pulse" size={26} />
-                <strong>Recording</strong>
-                <span>
-                  {Math.floor(recorder.seconds / 60)}:
-                  {String(recorder.seconds % 60).padStart(2, '0')}
-                </span>
-              </>
-            ) : (
-              <>
-                <LoaderCircle size={20} className="animate-spin" />
-                <strong>Transcribing your recording…</strong>
-              </>
-            )}
-          </div>
-        )}
+        <div className="composer-input">
+          {recorder.state === 'idle' ? (
+            <>
+              <Sparkles className="composer-sparkle" size={20} aria-hidden="true" />
+              <textarea
+                ref={textarea}
+                aria-label="Message Finance Assistant"
+                placeholder="Ask a question or describe a finance task…"
+                value={value}
+                onChange={(event) => {
+                  onChange(event.target.value);
+                  event.target.style.height = 'auto';
+                  event.target.style.height = `${Math.min(event.target.scrollHeight, 160)}px`;
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    send();
+                  }
+                }}
+                rows={2}
+                disabled={disabled}
+              />
+            </>
+          ) : (
+            <div className="recording-preview" role="status" aria-live="polite">
+              {recorder.state === 'recording' ? (
+                <>
+                  <span className="recording-dot" />
+                  <AudioLines className="pulse" size={26} />
+                  <strong>Recording</strong>
+                  <span>
+                    {Math.floor(recorder.seconds / 60)}:
+                    {String(recorder.seconds % 60).padStart(2, '0')}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <LoaderCircle size={20} className="animate-spin" />
+                  <strong>Transcribing your recording…</strong>
+                </>
+              )}
+            </div>
+          )}
+        </div>
         <div className="composer-bottom">
           <div className="composer-context">
             <span className="company-mini">{(capabilities?.company || 'USMF').toUpperCase()}</span>
-            <span>Dynamics 365 Finance</span>
+            <span className="composer-service">Dynamics 365 Finance</span>
           </div>
           <div className="composer-controls">
             {recorder.state !== 'idle' ? (

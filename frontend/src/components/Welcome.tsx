@@ -1,14 +1,4 @@
-import {
-  ArrowUpRight,
-  Building2,
-  CalendarClock,
-  FileSpreadsheet,
-  Mail,
-  Receipt,
-  ShieldCheck,
-  Sparkles,
-  PlusCircle,
-} from 'lucide-react';
+import { ArrowUpRight, Building2, CalendarClock, Mail, Receipt, PlusCircle } from 'lucide-react';
 import type { Capabilities } from '../types';
 const suggestions = [
   {
@@ -37,40 +27,27 @@ const suggestions = [
   },
 ];
 export function Welcome({
-  onPrompt,
   capabilities,
   onSettings,
 }: {
-  onPrompt: (value: string) => void;
   capabilities?: Capabilities;
   onSettings: () => void;
 }) {
   return (
     <div className="welcome">
-      <div className="welcome-kicker">
-        <span className="welcome-symbol">
-          <FileSpreadsheet size={24} />
-        </span>
-        <span>Your finance workspace</span>
+      <div className="welcome-orb" aria-hidden="true">
+        <span className="welcome-orb-ring" />
+        <span className="welcome-orb-core" />
       </div>
-      <h1>
-        What would you like
-        <br />
-        <span>to review today?</span>
-      </h1>
-      <p className="welcome-description">
-        Explore balances, understand invoices, and prepare your next action with evidence from
-        Dynamics 365 Finance.
-      </p>
-      <div className="welcome-trust">
-        <span>
-          <ShieldCheck size={14} />
-          ERP-backed answers
-        </span>
-        <span>
-          <Sparkles size={14} />
-          Safe, confirmed actions
-        </span>
+      <div className="welcome-intro">
+        <p className="welcome-kicker">Your finance, made clear.</p>
+        <h1>
+          How can I help you <span>today?</span>
+        </h1>
+        <p className="welcome-description">
+          Explore customers, review invoices, and prepare your next action with Dynamics 365
+          Finance.
+        </p>
       </div>
       {capabilities && !capabilities.ai_configured && !capabilities.mock_mode && (
         <div className="welcome-config">
@@ -84,36 +61,45 @@ export function Welcome({
           </button>
         </div>
       )}
-      <div className="suggestion-grid">
+    </div>
+  );
+}
+
+export function WelcomeSuggestions({
+  onPrompt,
+  showTestAction = true,
+}: {
+  onPrompt: (value: string) => void;
+  showTestAction?: boolean;
+}) {
+  return (
+    <div className="welcome-examples">
+      <div className="suggestion-grid" aria-label="Suggested finance questions">
         {suggestions.map(({ title, text, subtitle, Icon }) => (
-          <button key={title} className="suggestion-card" onClick={() => onPrompt(text)}>
+          <button
+            key={title}
+            className="suggestion-card"
+            title={subtitle}
+            onClick={() => onPrompt(text)}
+          >
             <span className="suggestion-icon">
-              <Icon size={19} />
+              <Icon size={16} />
             </span>
-            <span>
-              <strong>{title}</strong>
-              <small>{subtitle}</small>
-            </span>
-            <ArrowUpRight size={15} />
+            <strong>{title}</strong>
           </button>
         ))}
       </div>
-      <div className="welcome-workflow">
-        <div>
-          <PlusCircle size={16} />
-          <strong>Prepare a finance action</strong>
+      {showTestAction && (
+        <div className="welcome-workflow">
+          <button
+            className="text-button"
+            onClick={() => onPrompt('Create a test customer called TEST-ACME-001.')}
+          >
+            <PlusCircle size={15} />
+            Create a test customer <ArrowUpRight size={13} />
+          </button>
         </div>
-        <p>
-          Create a test customer or a draft invoice. Review the proposed changes before anything is
-          written.
-        </p>
-        <button
-          className="text-button"
-          onClick={() => onPrompt('Create a test customer called TEST-ACME-001.')}
-        >
-          Create a test customer <ArrowUpRight size={13} />
-        </button>
-      </div>
+      )}
     </div>
   );
 }

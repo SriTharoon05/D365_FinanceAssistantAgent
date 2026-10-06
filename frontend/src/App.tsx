@@ -4,18 +4,21 @@ import { useNavigate, useParams } from 'react-router-dom';
 import {
   Archive,
   ArrowLeft,
-  ChevronDown,
   Cpu,
   FileSpreadsheet,
   Menu,
+  MessageSquare,
   Mic,
+  Moon,
   Pause,
   Play,
+  Plus,
   Search,
   Settings as SettingsIcon,
   ShieldCheck,
   Sparkles,
   Square,
+  Sun,
   X,
 } from 'lucide-react';
 import type { Conversation, EvidenceRecord, IntegrationStatus } from './types';
@@ -30,7 +33,7 @@ import { MessageView } from './components/MessageView';
 import { EvidencePanel } from './components/Evidence';
 import { Settings } from './components/Settings';
 import { Composer } from './components/Composer';
-import { Welcome } from './components/Welcome';
+import { Welcome, WelcomeSuggestions } from './components/Welcome';
 import { Modal, Spinner, Toast } from './components/ui';
 export default function App() {
   const { conversationId } = useParams<{ conversationId: string }>();
@@ -235,6 +238,8 @@ export default function App() {
   };
   const selectedMessages = (messages.data || []).filter((message) => message.role !== 'system');
   const activeGeneration = generation?.conversationId === conversationId;
+  const showWelcome =
+    selectedMessages.length === 0 && !messages.isError && !(conversationId && messages.isLoading);
   return (
     <div className="app-shell">
       {sidebarOpen && (
@@ -281,7 +286,7 @@ export default function App() {
           isLoading={bootstrap.isLoading || conversations.isLoading}
         />
         <div className="sidebar-search">
-          <Search size={14} />
+          <Search size={18} />
           <input
             type="search"
             placeholder="Search conversations"
@@ -290,6 +295,22 @@ export default function App() {
             aria-label="Search conversations"
           />
         </div>
+        <nav className="sidebar-navigation" aria-label="Workspace">
+          <button
+            className="workspace-link"
+            aria-current={!archived ? 'page' : undefined}
+            onClick={() => {
+              navigate('/');
+              setArchived(false);
+              setSidebarOpen(false);
+              setComposer('');
+            }}
+          >
+            <MessageSquare size={19} />
+            Finance chat
+            <Sparkles size={15} />
+          </button>
+        </nav>
         <button
           className={`archived-button ${archived ? 'active' : ''}`}
           onClick={() => setArchived(!archived)}
@@ -331,7 +352,6 @@ export default function App() {
               <strong>Finance workspace</strong>
               <span>Local development profile</span>
             </div>
-            <ChevronDown size={14} />
           </div>
         </div>
       </aside>
@@ -362,6 +382,30 @@ export default function App() {
               {(effectiveStatus?.company || capabilities.data?.company || 'USMF').toUpperCase()}
             </span>
             <button
+              className="header-new-chat"
+              onClick={() => {
+                if (!generating.current) void createChat();
+              }}
+              disabled={creating || !!generation}
+              aria-label="Start new chat"
+            >
+              <Plus size={17} />
+              <span>New chat</span>
+            </button>
+            <button
+              className="theme-toggle icon-button"
+              aria-label="Toggle color theme"
+              title="Switch between light and dark themes"
+              onClick={() =>
+                updatePreferences({
+                  theme: document.documentElement.classList.contains('dark') ? 'light' : 'dark',
+                })
+              }
+            >
+              <Sun className="theme-icon-light" size={20} />
+              <Moon className="theme-icon-dark" size={20} />
+            </button>
+            <button
               className="header-settings icon-button"
               onClick={() => setSettingsOpen(true)}
               aria-label="Open settings"
@@ -381,7 +425,9 @@ export default function App() {
           onReconnect={() => reconnect.mutate()}
           isReconnecting={reconnect.isPending}
         />
-        <main className="chat-workspace">
+        <main
+          className={`chat-workspace ${showWelcome ? 'workspace-home' : 'workspace-conversation'}`}
+        >
           <div className="chat-scroll">
             {current.isError && (
               <div className="workspace-error" role="alert">
@@ -408,13 +454,7 @@ export default function App() {
                 <div />
               </div>
             ) : selectedMessages.length === 0 && !messages.isError ? (
-              <Welcome
-                onPrompt={(text) => {
-                  setComposer(text);
-                }}
-                capabilities={capabilities.data}
-                onSettings={() => setSettingsOpen(true)}
-              />
+              <Welcome capabilities={capabilities.data} onSettings={() => setSettingsOpen(true)} />
             ) : (
               <div className="messages">
                 {selectedMessages.map((message) => (
@@ -509,6 +549,7 @@ export default function App() {
               </div>
             )}
           </div>
+          {showWelcome && <WelcomeSuggestions onPrompt={setComposer} />}
         </main>
       </div>
       <EvidencePanel records={evidence} open={evidenceOpen} onOpenChange={setEvidenceOpen} />
