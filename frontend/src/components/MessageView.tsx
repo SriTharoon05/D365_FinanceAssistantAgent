@@ -17,6 +17,7 @@ import { endpoints } from '../lib/api';
 import { formatDate } from '../lib/format';
 import { ActionCard } from './ActionCard';
 import { EvidenceCards } from './Evidence';
+import { FinanceCharts } from './FinanceCharts';
 interface Props {
   message: Message;
   conversationId: string;
@@ -45,6 +46,11 @@ export function MessageView({
   const assistant = message.role === 'assistant';
   const evidence = message.metadata?.evidence || [];
   const actions = message.metadata?.pending_actions || [];
+  const hasChartData = evidence.some(
+    (record) =>
+      record.remaining_amount != null ||
+      (record.kind === 'payment' && (record.amount != null || record.original_amount != null)),
+  );
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(message.content);
@@ -118,6 +124,11 @@ export function MessageView({
             <p className="muted text-sm">Generation stopped. This response may be incomplete.</p>
           )}
         </div>
+        {assistant &&
+          !streaming &&
+          message.status === 'completed' &&
+          !actions.length &&
+          hasChartData && <FinanceCharts messageId={message.id} />}
         {evidence.length > 0 && (
           <EvidenceCards records={evidence} onOpen={() => onEvidence(evidence)} />
         )}

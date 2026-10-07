@@ -24,6 +24,11 @@ class ToolEvidence(FinanceModel):
     voucher: str | None = None
     source_entity: str
     retrieved_at: datetime
+    payment_date: date | None = None
+    transaction_date: date | None = None
+    reference: str | None = None
+    amount: Decimal | None = None
+    days_overdue: int | None = None
 
 
 class Customer(FinanceModel):

@@ -6,6 +6,7 @@ from collections import defaultdict, deque
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Literal
 
 import structlog
 from fastapi import Depends, FastAPI, File, Form, Request, UploadFile
@@ -40,6 +41,7 @@ from app.schemas.api import (
     FeedbackRequest,
 )
 from app.services.voice import GroqTranscriber
+from app.services.charts import QuickChartRenderer, build_charts
 
 logger = structlog.get_logger()
 
@@ -91,6 +93,7 @@ def create_app(settings=None, runtime=None):
         app.state.settings = settings
         app.state.chat = ChatService(settings, app.state.runtime, factory)
         app.state.actions = ActionsService(settings, app.state.runtime, factory)
+        app.state.charts = QuickChartRenderer()
         connection_task = None
         if settings.d365_mock_mode:
             await app.state.runtime.start()
@@ -129,6 +132,7 @@ def create_app(settings=None, runtime=None):
                 await connection_task
             except asyncio.CancelledError:
                 pass
+        await app.state.charts.close()
         await app.state.runtime.close()
         await engine.dispose()
 
@@ -355,6 +359,39 @@ def create_app(settings=None, runtime=None):
             return result
 
     rate_windows = defaultdict(deque)
+
+    async def find_message_charts(identifier, owner_id):
+        async with factory() as session:
+            message = await session.get(Message, identifier)
+            if not message:
+                raise AppError("message_not_found", "Message was not found.", 404)
+            await find_conversation(session, message.conversation_id, owner_id)
+            if message.role != "assistant" or message.status != "completed":
+                return []
+            records = (message.meta or {}).get("evidence", [])
+            return build_charts(records if isinstance(records, list) else [])
+
+    @app.get("/api/messages/{identifier}/charts")
+    async def charts(identifier: str, owner_id=Depends(owner)):
+        return {"charts": await find_message_charts(identifier, owner_id)}
+
+    @app.get("/api/messages/{identifier}/charts/{chart_id}.png")
+    async def chart_image(
+        identifier: str,
+        chart_id: str,
+        request: Request,
+        theme: Literal["light", "dark"] = "light",
+        size: Literal["standard", "compact"] = "standard",
+        owner_id=Depends(owner),
+    ):
+        descriptors = await find_message_charts(identifier, owner_id)
+        chart = next((item for item in descriptors if item["id"] == chart_id), None)
+        if chart is None:
+            raise AppError("chart_not_found", "Chart was not found for this response.", 404)
+        if size == "compact":
+            chart = {**chart, "render_size": "compact"}
+        image = await request.app.state.charts.render(chart, theme)
+        return Response(image, media_type="image/png")
 
     @app.post("/api/chat/stream")
     async def stream_chat(body: ChatRequest, request: Request, owner_id=Depends(owner)):

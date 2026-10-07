@@ -1,4 +1,12 @@
-import { ArrowUpRight, Building2, CalendarClock, Mail, Receipt, PlusCircle } from 'lucide-react';
+import {
+  ArrowUpRight,
+  Building2,
+  CalendarClock,
+  Mail,
+  Receipt,
+  PlusCircle,
+  ChartNoAxesCombined,
+} from 'lucide-react';
 import type { Capabilities } from '../types';
 const suggestions = [
   {
@@ -88,6 +96,20 @@ export function WelcomeSuggestions({
             <strong>{title}</strong>
           </button>
         ))}
+      </div>
+      <div className="chart-shortcuts" aria-label="Suggested finance charts">
+        <span>
+          <ChartNoAxesCombined size={14} /> Quick charts
+        </span>
+        <button onClick={() => onPrompt("Show Asterion's outstanding invoices as a chart.")}>
+          Invoices
+        </button>
+        <button onClick={() => onPrompt("Show Asterion's overdue invoices as a chart.")}>
+          Overdue
+        </button>
+        <button onClick={() => onPrompt("Show Asterion's payment history as a chart.")}>
+          Payments
+        </button>
       </div>
       {showTestAction && (
         <div className="welcome-workflow">

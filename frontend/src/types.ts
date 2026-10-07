@@ -44,11 +44,29 @@ export interface EvidenceRecord {
   external_invoice_id?: string;
   original_amount?: string | number;
   remaining_amount?: string | number;
+  amount?: string | number | null;
   due_date?: string;
+  payment_date?: string | null;
+  transaction_date?: string | null;
   voucher?: string;
+  reference?: string | null;
+  days_overdue?: number | null;
   source_entity?: string;
   retrieved_at?: string;
   [key: string]: unknown;
+}
+export interface ChartDescriptor {
+  id: string;
+  kind: 'bar' | 'line';
+  title: string;
+  company: string;
+  currency: string;
+  description: string;
+  points: Array<{ label: string; amount: string }>;
+  source_count: number;
+}
+export interface ChartResponse {
+  charts: ChartDescriptor[];
 }
 export interface PendingAction {
   id: string;

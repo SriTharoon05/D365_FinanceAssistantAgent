@@ -19,6 +19,7 @@ flowchart LR
 - Streaming chat, persistent conversations, finance evidence cards and invoice details.
 - Dynamics 365 connection status, reconnect and metadata-based transaction capability discovery.
 - Outstanding balances grouped by currency, overdue analysis, payment history and draft collection reminders.
+- Snapshot charts for invoice amounts, overdue invoices and payments, with source data available alongside the image.
 - Confirmation-gated customer and draft invoice CRUD; unposted customer payment journal preparation; audit history.
 - Synthetic mock mode for development without ERP or AI credentials.
 - Optional Groq speech input and browser-native speech output.
@@ -61,6 +62,16 @@ For live use, edit **`backend/.env`**, restart the backend and omit `-Mock` / `-
 If D365 stays **Connecting**, keep Uvicorn running and inspect the status JSON from a second PowerShell window. A local status endpoint returning HTTP 200 confirms that the API answered; inspect the JSON stage and error summary. Authentication/customer checks have a 60-second budget, followed by a separate 180-second metadata budget: the default maximum is 240 seconds. Later reconnects can reuse a valid structural schema cache while checking ERP permissions afresh. Existing `.env` files need no new values for this fix; update and restart the backend. See [connection troubleshooting](guide.md#d365-stays-connecting-or-reconnecting) for safe checks and optional settings.
 
 For unavailable balances, the resolver now supports an existing `CustTransBiEntities` set with validated canonical settlement fields, deriving current remaining transaction-currency amounts as `AmountCur - SettleAmountCur`. Stop the dev servers, run `git pull --ff-only` and restart; `D365_OPEN_TRANSACTIONS_ENTITY=auto` needs no `.env` change. See [current balances and settlement fields](guide.md#current-balances-and-settlement-fields) for an explicit override and D365 reconciliation checks. Overdue date cutoffs apply to current remaining amounts; historical balances are not reconstructed. This adapter has not been reconciled against your live tenant.
+
+## Charts
+
+- “Show Asterion's remaining invoice amounts as a bar chart.”
+- “Show a bar chart of Asterion's currently overdue invoices.”
+- “Show Asterion's payments by date as a line chart.”
+
+Charts use the verified records returned for that response, with `Decimal` totals kept separate by company, customer and currency. They are saved snapshots of those rows, which may be a bounded subset; they do not reconstruct historical balances or establish complete account history.
+
+Chart images use [QuickChart's free POST endpoint](https://quickchart.io/documentation/usage/post-endpoint/) through the backend. No new credentials are required; the backend needs outbound HTTPS access to `quickchart.io`. **Amounts, currency and generic category labels or payment dates are sent to QuickChart.** Customer names and company/account/invoice/voucher/reference identifiers and credentials are excluded from that request. If image rendering is unavailable, the chart's data remains viewable locally. See [chart details](guide.md#finance-charts).
 
 ## Checks
 

@@ -472,6 +472,14 @@ The chat endpoint uses `POST /api/chat/stream`. The frontend reads server-sent e
 
 Errors include a stable code, useful message, request ID and retryability. Use the request ID when correlating browser failures with structured backend logs. Logs and API responses must not expose authorization headers or secret values.
 
+### Finance charts
+
+`GET /api/messages/{id}/charts` returns chart descriptors built from saved evidence; `GET /api/messages/{id}/charts/{chartid}.png?theme=light|dark` renders their images through the backend. Both routes check message ownership and use the existing session cookie. Chart descriptors come from persisted, verified response evidence: remaining invoice amounts and overdue amounts use bars, and payment amounts grouped by date use a line chart. Python `Decimal` aggregates amounts separately for each company/customer/currency. These are snapshots of the returned rows and can represent a bounded subset; a date axis is not a reconstruction of historical balances or proof of complete payment history.
+
+The backend sends generated Chart.js 4 JSON to [QuickChart](https://quickchart.io/documentation/) using `POST https://quickchart.io/chart`, explicit PNG output and theme-specific colors. The free endpoint needs no API key, but requires outbound HTTPS and is subject to Community-plan limits. Only amounts, currency and generic labels or ISO payment dates are shared; names, company/account/invoice/voucher/reference identifiers, ERP credentials and conversation text are excluded from the request. Financial amounts remain financial data even when identifiers are omitted. Source data remains available locally if the image request fails.
+
+QuickChart's [privacy policy](https://quickchart.io/privacy/) states that on-demand images and their data are evicted from memory, with stored definitions being an exception for explicitly created short URLs. This application uses direct POST rendering rather than short URLs/templates; it does not put chart definitions into QuickChart GET URLs. Rendering an existing message uses its saved evidence, not a fresh ERP query. Ask a new finance question when you need current records. See the [three example chart questions](README.md#charts).
+
 ## Example prompts
 
 With live credentials use your real customer identifiers. In mock mode use the synthetic customer suggestions shown in the application.

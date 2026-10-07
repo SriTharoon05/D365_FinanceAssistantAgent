@@ -1,6 +1,7 @@
 import type {
   AuditEvent,
   Capabilities,
+  ChartResponse,
   Conversation,
   IntegrationStatus,
   Message,
@@ -76,6 +77,7 @@ export const endpoints = {
       body: JSON.stringify({ selected_company }),
     }),
   messages: (id: string) => api<Message[]>(`/conversations/${encodeURIComponent(id)}/messages`),
+  charts: (id: string) => api<ChartResponse>(`/messages/${encodeURIComponent(id)}/charts`),
   updateConversation: (id: string, changes: { title?: string; archived?: boolean }) =>
     api<Conversation>(`/conversations/${encodeURIComponent(id)}`, {
       method: 'PATCH',
@@ -109,6 +111,14 @@ export const endpoints = {
     return api<{ text: string }>('/voice/transcribe', { method: 'POST', body: data, signal });
   },
 };
+export function chartImageUrl(
+  messageId: string,
+  chartId: string,
+  theme: 'light' | 'dark',
+  size: 'standard' | 'compact' = 'standard',
+) {
+  return `${API_BASE}/messages/${encodeURIComponent(messageId)}/charts/${encodeURIComponent(chartId)}.png?theme=${theme}${size === 'compact' ? '&size=compact' : ''}`;
+}
 export async function exportConversation(id: string, format: 'markdown' | 'json') {
   const response = await fetch(`${API_BASE}/conversations/${encodeURIComponent(id)}/export`, {
     credentials: 'include',
