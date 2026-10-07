@@ -18,6 +18,36 @@ from app.core.errors import AppError
 
 OPEN_KINDS = {"invoice", "open_transaction", "overdue_invoice", "credit", "customer_transaction", "payment"}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
+CHART_PALETTES = {
+    "light": (
+        "#0d9488",
+        "#8b5cf6",
+        "#d97706",
+        "#e11d48",
+        "#2563eb",
+        "#ea580c",
+        "#0891b2",
+        "#db2777",
+        "#65a30d",
+        "#4f46e5",
+        "#059669",
+        "#c026d3",
+    ),
+    "dark": (
+        "#2dd4bf",
+        "#a78bfa",
+        "#fbbf24",
+        "#fb7185",
+        "#60a5fa",
+        "#fb923c",
+        "#22d3ee",
+        "#f472b6",
+        "#a3e635",
+        "#818cf8",
+        "#34d399",
+        "#e879f9",
+    ),
+}
 
 
 def _amount(value):
@@ -349,8 +379,8 @@ class QuickChartRenderer:
             labels, axis_font_size = _category_labels(points, compact=compact)
         horizontal = compact and kind == "bar"
         foreground = "#f0eef8" if theme == "dark" else "#334155"
-        background = "#beafff" if theme == "dark" else "#6152df"
-        border = "#beafff" if theme == "dark" else "#5041ca"
+        palette = CHART_PALETTES[theme]
+        colors = [palette[index % len(palette)] for index in range(len(points))]
         title = f"Returned open amounts ({currency})"
         if kind == "line":
             supplied_title = chart.get("title", "")
@@ -383,6 +413,19 @@ class QuickChartRenderer:
         if horizontal:
             lines = max(len(label) if isinstance(label, list) else 1 for label in labels)
             height = max(height, max(24, lines * 14) * len(points) + 90)
+        dataset = {"label": title, "data": values, "borderWidth": 2, "tension": 0}
+        if kind == "bar":
+            dataset.update(backgroundColor=colors, borderColor=colors, borderRadius=4)
+        else:
+            dataset.update(
+                borderColor=palette[0],
+                backgroundColor="rgba(45, 212, 191, 0.14)" if theme == "dark" else "rgba(13, 148, 136, 0.12)",
+                fill="origin",
+                pointBackgroundColor=colors,
+                pointBorderColor="#252433" if theme == "dark" else "#ffffff",
+                pointBorderWidth=2,
+                pointRadius=3 if compact else 4,
+            )
         return {
             "version": "4",
             "format": "png",
@@ -394,17 +437,7 @@ class QuickChartRenderer:
                 "type": kind,
                 "data": {
                     "labels": labels,
-                    "datasets": [
-                        {
-                            "label": title,
-                            "data": values,
-                            "backgroundColor": background,
-                            "borderColor": border,
-                            "borderWidth": 2,
-                            "pointRadius": 3,
-                            "tension": 0,
-                        }
-                    ],
+                    "datasets": [dataset],
                 },
                 "options": {
                     "indexAxis": "y" if horizontal else "x",
