@@ -48,6 +48,35 @@ function renderCharts(messageId = 'message-1') {
 afterEach(() => document.documentElement.classList.remove('dark'));
 
 describe('finance chart presentation', () => {
+  it('shows invoice identifiers without numbered placeholders and retains full labels in Data', async () => {
+    const invoices: ChartDescriptor = {
+      ...remaining,
+      points: [
+        { label: 'FTI-00000021', amount: '75000' },
+        { label: 'FTI-00000022', amount: '35000' },
+        { label: 'AST-CHART-20261007A-03', amount: '25000' },
+        { label: 'Other (2 records)', amount: '15000' },
+      ],
+      source_count: 5,
+    };
+    vi.spyOn(endpoints, 'charts').mockResolvedValue({ charts: [invoices] });
+    renderCharts();
+
+    const categories = await screen.findByLabelText('Chart categories');
+    expect(within(categories).getByText('FTI-00000022', { exact: true })).toBeVisible();
+    expect(within(categories).getByText('AST-CHART-20261007A-03', { exact: true })).toBeVisible();
+    expect(categories).not.toHaveTextContent('Record 1');
+    expect(categories).not.toHaveTextContent('Record 2');
+
+    await userEvent.click(within(categories).getByRole('button', { name: 'View all categories' }));
+    const table = screen.getByRole('table', { name: 'Open amounts by due date data' });
+    expect(within(table).getByRole('row', { name: 'FTI-00000022 INR 35000' })).toBeVisible();
+    expect(
+      within(table).getByRole('row', { name: 'AST-CHART-20261007A-03 INR 25000' }),
+    ).toBeVisible();
+    expect(within(table).getByRole('row', { name: 'Other (2 records) INR 15000' })).toBeVisible();
+  });
+
   it('keeps exact source amounts accessible when the chart image fails and supports an image retry', async () => {
     const discovery = vi.spyOn(endpoints, 'charts').mockResolvedValue({ charts: [remaining] });
     renderCharts('message/1');
@@ -157,6 +186,31 @@ describe('finance chart presentation', () => {
     expect(discovery).toHaveBeenCalledTimes(1);
     unmount();
     expect(listeners.size).toBe(0);
+  });
+
+  it('preserves the height of compact invoice charts with many categories', async () => {
+    vi.spyOn(window, 'matchMedia').mockReturnValue({
+      matches: true,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    } as unknown as MediaQueryList);
+    vi.spyOn(endpoints, 'charts').mockResolvedValue({
+      charts: [
+        {
+          ...remaining,
+          points: Array.from({ length: 12 }, (_, index) => ({
+            label: `FTI-${String(index + 21).padStart(8, '0')}`,
+            amount: '1000',
+          })),
+          source_count: 12,
+        },
+      ],
+    });
+    renderCharts();
+    const image = await screen.findByAltText('Open amounts by due date, USMF, INR');
+    expect(image).toHaveAttribute('width', '360');
+    expect(image).toHaveAttribute('height', '378');
+    expect(image.parentElement).toHaveClass('chart-visual-compact-bar');
   });
 
   it('keeps messages with no chart data free of empty chart panels', async () => {

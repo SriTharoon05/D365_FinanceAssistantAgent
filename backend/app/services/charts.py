@@ -1,10 +1,11 @@
-"""Charts of returned ERP evidence and a constrained, anonymous QuickChart renderer."""
+"""Charts of returned ERP evidence and a constrained QuickChart renderer."""
 
 import asyncio
 import hashlib
 import json
 import math
 import re
+import textwrap
 import time
 import zlib
 from collections import OrderedDict, defaultdict
@@ -79,6 +80,49 @@ def _timestamp(value):
 
 def _text(value):
     return value.strip() if isinstance(value, str) else ""
+
+
+def _category_labels(points, *, compact):
+    """Show bounded ERP identifiers, keeping full identifiers in the local descriptor."""
+    font_size = 11 if compact else 12
+    # Compact bars run horizontally, leaving enough room for ordinary invoice identifiers
+    # on one line. Desktop columns wrap according to the number of visible categories.
+    line_width = 18 if compact else max(4, min(18, int(620 / (len(points) * font_size * 0.62))))
+    display_labels = []
+    originals = []
+    for point in points:
+        label = _text(point.get("label")) if isinstance(point, dict) else ""
+        # Only bounded identifier text enters QuickChart: never function syntax, controls,
+        # arbitrary Chart.js configuration, or other fields from the ERP evidence.
+        if (
+            not label
+            or len(label) > 2048
+            or not all(char.isalnum() or char in " -_./:()#@+" for char in label)
+        ):
+            raise AppError("CHART_DATA_INVALID", "The chart data could not be rendered.", status_code=422)
+        label = " ".join(label.split())
+        originals.append(label)
+        limit = line_width * 3
+        if len(label) > limit:
+            tail = min(8, limit // 2)
+            label = label[: limit - tail - 1] + "…" + label[-tail:]
+        display_labels.append(label)
+    # Different long identifiers can share a prefix and suffix. A short stable digest keeps
+    # their shortened axis labels distinct while Data retains the exact source categories.
+    original_groups = defaultdict(set)
+    for original, label in zip(originals, display_labels):
+        original_groups[label].add(original)
+    for index, (original, label) in enumerate(zip(originals, display_labels)):
+        if len(original_groups[label]) > 1:
+            digest = hashlib.sha256(original.encode()).hexdigest()[:6]
+            display_labels[index] = label[: line_width * 3 - 7] + "…" + digest
+    wrapped = []
+    for label in display_labels:
+        lines = textwrap.wrap(label, width=line_width)
+        if len(lines) > 3:
+            lines = [label[index : index + line_width] for index in range(0, len(label), line_width)]
+        wrapped.append(lines if len(lines) > 1 else label)
+    return wrapped, font_size
 
 
 def _identity(row, *, payment=False, anonymous=0):
@@ -287,20 +331,23 @@ class QuickChartRenderer:
             or not 1 <= len(points) <= 250
         ):
             raise AppError("CHART_DATA_INVALID", "The chart data could not be rendered.", status_code=422)
+        compact = chart.get("render_size") == "compact"
         labels, values = [], []
-        for index, point in enumerate(points):
+        for point in points:
             amount = _amount(point.get("amount")) if isinstance(point, dict) else None
             if amount is None or not math.isfinite(float(amount)):
                 raise AppError("CHART_DATA_INVALID", "The chart data could not be rendered.", status_code=422)
-            label = _day(point.get("label")) if kind == "line" else f"Record {index + 1}"
+            label = _day(point.get("label")) if kind == "line" else point.get("label")
             if label is None:
                 raise AppError("CHART_DATA_INVALID", "The chart data could not be rendered.", status_code=422)
-            if kind == "bar" and re.fullmatch(r"Other \(\d+ records\)", str(point.get("label", ""))):
-                label = point["label"]
             labels.append(label)
             values.append(
                 float(amount)
             )  # Exact Decimal values remain in the descriptor; floats are geometry only.
+        axis_font_size = 12 if compact else 16
+        if kind == "bar":
+            labels, axis_font_size = _category_labels(points, compact=compact)
+        horizontal = compact and kind == "bar"
         foreground = "#f0eef8" if theme == "dark" else "#334155"
         background = "#beafff" if theme == "dark" else "#6152df"
         border = "#beafff" if theme == "dark" else "#5041ca"
@@ -317,12 +364,30 @@ class QuickChartRenderer:
             )
             title = f"Returned payments by {period} ({currency})"
         grid = "rgba(240, 238, 248, 0.16)" if theme == "dark" else "rgba(51, 65, 85, 0.12)"
-        compact = chart.get("render_size") == "compact"
+        category_axis = {
+            "ticks": {
+                "color": foreground,
+                "font": {"size": axis_font_size},
+                "autoSkip": kind != "bar",
+                "minRotation": 0,
+                "maxRotation": 0 if kind == "bar" else 50,
+            },
+            "grid": {"color": grid},
+        }
+        numeric_axis = {
+            "beginAtZero": True,
+            "ticks": {"color": foreground, "font": {"size": 12 if compact else 16}},
+            "grid": {"color": grid},
+        }
+        height = 280 if compact else 300
+        if horizontal:
+            lines = max(len(label) if isinstance(label, list) else 1 for label in labels)
+            height = max(height, max(24, lines * 14) * len(points) + 90)
         return {
             "version": "4",
             "format": "png",
             "width": 360 if compact else 720,
-            "height": 280 if compact else 300,
+            "height": height,
             "devicePixelRatio": 1,
             "backgroundColor": "#252433" if theme == "dark" else "#ffffff",
             "chart": {
@@ -342,6 +407,7 @@ class QuickChartRenderer:
                     ],
                 },
                 "options": {
+                    "indexAxis": "y" if horizontal else "x",
                     "animation": False,
                     "plugins": {
                         "legend": {"display": False},
@@ -353,12 +419,8 @@ class QuickChartRenderer:
                         },
                     },
                     "scales": {
-                        "x": {"ticks": {"color": foreground, "font": {"size": 16}}, "grid": {"color": grid}},
-                        "y": {
-                            "beginAtZero": True,
-                            "ticks": {"color": foreground, "font": {"size": 16}},
-                            "grid": {"color": grid},
-                        },
+                        "x": numeric_axis if horizontal else category_axis,
+                        "y": category_axis if horizontal else numeric_axis,
                     },
                 },
             },

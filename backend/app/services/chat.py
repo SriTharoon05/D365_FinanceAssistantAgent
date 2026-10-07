@@ -16,6 +16,7 @@ from sqlalchemy import func, select, update
 from app.agent.graph import run_live_agent
 from app.agent.grounding import requires_finance_grounding, write_placeholder_help
 from app.agent.mock import parse_date, run_mock_agent
+from app.agent.read_routing import execute_read_request, resolve_read_request
 from app.agent.tools import READ_TOOLS, TOOL_SCHEMAS
 from app.agent.write_routing import resolve_write_request
 from app.core.errors import AppError
@@ -204,31 +205,47 @@ class ChatService:
                 return datetime.min.replace(tzinfo=UTC)
             return stamp.replace(tzinfo=UTC) if stamp.tzinfo is None else stamp.astimezone(UTC)
 
-        for run in reversed(runs):
-            account = (run.safe_input or {}).get("account") or (run.safe_output or {}).get(
-                "customer", {}
-            ).get("account")
-            if account:
-                context["account"] = account
-            customers = (run.safe_output or {}).get("customers", [])
-            if len(customers) == 1:
-                context["account"] = customers[0]["account"]
-            if run.tool_name == "get_invoice_details":
-                invoice_company = (run.safe_output or {}).get("invoice", {}).get("company")
-                if company is None or (
-                    isinstance(invoice_company, str) and invoice_company.casefold() == company.casefold()
+        # Read and action histories are separate queries. Merge their chronology so
+        # an old action cannot override a more recently selected customer.
+        for item in sorted([*runs, *actions], key=created_at):
+            if isinstance(item, ToolRun):
+                run = item
+                output = run.safe_output or {}
+                customer = output.get("customer") or {}
+                customers = output.get("customers") or []
+                run_company = (
+                    (run.safe_input or {}).get("company")
+                    or output.get("company")
+                    or customer.get("company")
+                    or (output.get("invoice") or {}).get("company")
+                    or (customers[0].get("company") if len(customers) == 1 else None)
+                    or ((output.get("evidence") or [{}])[0].get("company"))
+                )
+                if company is not None and (
+                    not isinstance(run_company, str) or run_company.casefold() != company.casefold()
                 ):
+                    continue
+                account = (run.safe_input or {}).get("account") or customer.get("account")
+                if len(customers) == 1:
+                    account = customers[0].get("account")
+                if account:
+                    context["account"] = account
+                    if run.tool_name in READ_TOOLS:
+                        context["last_read_tool"] = run.tool_name
+                if run.tool_name == "get_invoice_details":
                     context["invoice"] = (run.safe_input or {}).get("identifier")
                     latest_invoice_at = created_at(run)
-        for action in reversed(actions):
-            if action.proposed_changes.get("account"):
-                context["account"] = action.proposed_changes["account"]
-            if action.status != "executed":
                 continue
+            action = item
             action_company = action.proposed_changes.get("company")
             if company is not None and (
                 not isinstance(action_company, str) or action_company.casefold() != company.casefold()
             ):
+                continue
+            if action.proposed_changes.get("account"):
+                context["account"] = action.proposed_changes["account"]
+                context.pop("last_read_tool", None)
+            if action.status != "executed":
                 continue
             result = action.result or {}
             result = result.get("result") or result
@@ -358,7 +375,7 @@ class ChatService:
                                 conversation_id=conversation_id,
                                 message_id=assistant_id,
                                 tool_name=name,
-                                safe_input=safe_json(arguments),
+                                safe_input=safe_json({**arguments, "company": company}),
                                 safe_output=safe_json(output),
                                 status=tool_status,
                                 duration_ms=duration,
@@ -452,6 +469,9 @@ class ChatService:
                                         "delta": "I prepared the requested change for confirmation. Review the target and proposed values on the action card, then Confirm to apply it."
                                     },
                                 )
+                        elif routed_read := resolve_read_request(message, identifiers, company):
+                            answer = await execute_read_request(routed_read, company, execute)
+                            await emit("message_delta", {"delta": answer})
                         else:
                             await run_live_agent(
                                 self.settings,

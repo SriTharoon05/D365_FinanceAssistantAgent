@@ -41,8 +41,14 @@ function ChartImage({
   const source = compact
     ? chartImageUrl(messageId, chart.id, theme, 'compact')
     : chartImageUrl(messageId, chart.id, theme);
+  const compactBar = compact && chart.kind === 'bar';
+  const imageHeight = compactBar
+    ? Math.max(280, chart.points.length * 24 + 90)
+    : compact
+      ? 280
+      : 300;
   return (
-    <div className="chart-visual">
+    <div className={`chart-visual${compactBar ? ' chart-visual-compact-bar' : ''}`}>
       {status === 'error' ? (
         <div className="chart-error" role="status">
           <p>The chart image is unavailable. You can still review the source amounts in Data.</p>
@@ -69,7 +75,7 @@ function ChartImage({
             src={attempt ? `${source}&reload=${attempt}` : source}
             alt={`${chart.title}, ${chart.company}, ${chart.currency}`}
             width={compact ? 360 : 720}
-            height={compact ? 280 : 300}
+            height={imageHeight}
             loading="lazy"
             decoding="async"
             onLoad={() => setStatus('loaded')}
@@ -156,9 +162,7 @@ export function FinanceCharts({ messageId }: { messageId: string }) {
           {chart.kind === 'bar' && (
             <div className="chart-legend" aria-label="Chart categories">
               {chart.points.slice(0, 3).map((point, index) => (
-                <span key={`${point.label}:${index}`}>
-                  <strong>Record {index + 1}</strong> · {point.label}
-                </span>
+                <span key={`${point.label}:${index}`}>{point.label}</span>
               ))}
               <button className="text-button" onClick={() => setView('data')}>
                 {chart.points.length > 3 ? 'View all categories' : 'View exact amounts'}

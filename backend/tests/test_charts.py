@@ -1,4 +1,4 @@
-"""Financial chart integrity and the bounded anonymous PNG transport."""
+"""Financial chart integrity and the bounded PNG transport."""
 
 import asyncio
 import json
@@ -210,14 +210,14 @@ def test_long_payment_histories_are_aggregated_honestly_below_free_label_limit(p
     assert chart["source_count"] == len(rows)
 
 
-async def test_renderer_uses_free_post_anonymous_labels_controlled_configuration_and_theme():
+async def test_renderer_uses_free_post_source_identifiers_controlled_configuration_and_theme():
     calls = []
 
     def transport(request):
         calls.append(request)
         return httpx.Response(200, content=png(), headers={"Content-Type": "image/png"})
 
-    chart = build_charts([record()])[0]
+    chart = build_charts([record(invoice_number="FTI-00000022")])[0]
     chart["chart"] = "malicious arbitrary javascript"
     async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
         renderer = QuickChartRenderer(client)
@@ -230,10 +230,13 @@ async def test_renderer_uses_free_post_anonymous_labels_controlled_configuration
         assert request.method == "POST" and str(request.url) == "https://quickchart.io/chart"
         assert "authorization" not in request.headers and "key" not in request.url.params
         body = request.content.decode()
-        assert all(secret not in body for secret in ("PRIVATE", "usmf", "PrivateOpenEntities", "malicious"))
+        assert all(
+            secret not in body
+            for secret in ("PRIVATE-CUSTOMER", "PRIVATE-VOUCHER", "usmf", "PrivateOpenEntities", "malicious")
+        )
         payload = json.loads(body)
         assert payload["version"] == "4" and payload["format"] == "png"
-        assert payload["chart"]["data"]["labels"] == ["Record 1"]
+        assert payload["chart"]["data"]["labels"] == ["FTI-00000022"]
         assert payload["chart"]["data"]["datasets"][0]["data"] == [100.0]
         assert payload["chart"]["data"]["datasets"][0]["tension"] == 0
     assert json.loads(calls[0].content)["backgroundColor"] == "#ffffff"
@@ -258,7 +261,92 @@ async def test_compact_image_has_only_controlled_size_and_its_own_cache_entry():
     assert (calls[1]["width"], calls[1]["height"]) == (360, 280)
     assert calls[1]["chart"]["options"]["plugins"]["title"]["font"]["size"] == 16
     assert calls[0]["chart"]["options"]["plugins"]["title"]["font"]["size"] == 18
-    assert all(payload["chart"]["options"]["scales"]["x"]["ticks"]["font"]["size"] == 16 for payload in calls)
+    assert calls[0]["chart"]["options"]["scales"]["x"]["ticks"]["font"]["size"] == 12
+    assert calls[1]["chart"]["options"]["scales"]["y"]["ticks"]["font"]["size"] == 11
+
+
+@pytest.mark.parametrize("compact", [False, True])
+@pytest.mark.parametrize("count", [2, 7, 12])
+def test_invoice_identifiers_wrap_without_omitted_categories_on_desktop_and_mobile(compact, count):
+    chart = build_charts(
+        [
+            record(invoice_number=f"FTI-{index:08}", remaining_amount=str(100 - index))
+            for index in range(count)
+        ]
+    )[0]
+    if compact:
+        chart["render_size"] = "compact"
+    payload = QuickChartRenderer()._payload(chart, "light")
+    labels = payload["chart"]["data"]["labels"]
+    assert len(labels) == count
+    assert ["".join(label) if isinstance(label, list) else label for label in labels] == [
+        point["label"] for point in chart["points"]
+    ]
+    assert all(not isinstance(label, list) or len(label) <= 3 for label in labels)
+    ticks = payload["chart"]["options"]["scales"]["y" if compact else "x"]["ticks"]
+    assert ticks["autoSkip"] is False and ticks["maxRotation"] == 0
+    assert payload["chart"]["options"]["indexAxis"] == ("y" if compact else "x")
+    if compact:
+        assert labels == [point["label"] for point in chart["points"]]
+        assert payload["height"] == max(280, count * 24 + 90)
+
+
+def test_voucher_is_axis_category_when_invoice_identifier_is_unavailable():
+    chart = build_charts([record(invoice_number="", voucher="ARPM000910")])[0]
+    payload = QuickChartRenderer()._payload(chart, "light")
+    assert payload["chart"]["data"]["labels"] == ["ARPM000910"]
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_long_identifiers_are_bounded_distinct_and_full_identifiers_remain_in_data(compact):
+    identifiers = ["FTI-" + "A" * 200 + suffix + "12345678" for suffix in ("FIRST", "SECOND")]
+    chart = build_charts([record(invoice_number=identifier) for identifier in identifiers])[0]
+    if compact:
+        chart["render_size"] = "compact"
+    payload = QuickChartRenderer()._payload(chart, "light")
+    labels = payload["chart"]["data"]["labels"]
+    assert labels[0] != labels[1]
+    assert all(len(label) <= 3 for label in labels)
+    assert all("…" in "".join(label) and len("".join(label)) <= 54 for label in labels)
+    assert {point["label"] for point in chart["points"]} == set(identifiers)
+
+
+@pytest.mark.parametrize("label", ["function(){return secret;}", "INV\nINJECT", "INV\u202e123", "X" * 2049])
+async def test_unsafe_or_unbounded_identifiers_never_reach_quickchart(label):
+    def transport(request):
+        raise AssertionError("Unsafe category data must remain local")
+
+    chart = build_charts([record(invoice_number=label)])[0]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(transport)) as client:
+        with pytest.raises(AppError) as error:
+            await QuickChartRenderer(client).render(chart, "light")
+    assert error.value.code == "CHART_DATA_INVALID"
+
+
+def test_payment_date_axis_and_other_category_keep_their_meaning():
+    payment = build_charts(
+        [record(kind="payment", remaining_amount=None, payment_date="2026-10-05", amount="10")]
+    )[0]
+    renderer = QuickChartRenderer()
+    assert renderer._payload(payment, "light")["chart"]["data"]["labels"] == ["2026-10-05"]
+    open_chart = build_charts([record(invoice_number=f"INV-{index}") for index in range(15)])[0]
+    payload = renderer._payload(open_chart, "light")
+    last = payload["chart"]["data"]["labels"][-1]
+    assert ("".join(last) if isinstance(last, list) else last).replace(" ", "") == "Other(4records)"
+
+
+@pytest.mark.parametrize("compact", [False, True])
+def test_numeric_axis_starts_at_zero_and_signed_amounts_survive_orientation_change(compact):
+    chart = build_charts(
+        [record(invoice_number="FTI-00000022"), record(invoice_number="CREDIT-1", remaining_amount="-15.25")]
+    )[0]
+    if compact:
+        chart["render_size"] = "compact"
+    payload = QuickChartRenderer()._payload(chart, "dark")
+    assert payload["chart"]["data"]["datasets"][0]["data"] == [100.0, -15.25]
+    scales = payload["chart"]["options"]["scales"]
+    assert scales["x" if compact else "y"]["beginAtZero"] is True
+    assert "beginAtZero" not in scales["y" if compact else "x"]
 
 
 @pytest.mark.parametrize("failure", ["rate", "not_image", "corrupt", "network", "oversize"])

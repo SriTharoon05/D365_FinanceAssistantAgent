@@ -14,9 +14,23 @@ _NON_ERP = re.compile(
     r"what can you do|who are you|help|how do i use (?:this|the app)|explain (?:your )?capabilities)[.!?\s]*$",
     re.I,
 )
+_CONCEPT = (
+    r"(?:outstanding balance|balance|free[- ]text invoice|invoice|payment|customer payment journal|"
+    r"payment journal|customer settlement|settlement|posting|currency|receivable|customer account|"
+    r"revenue account|main account|posting profile|payment terms)"
+)
+_DEFINITION = re.compile(
+    rf"^(?:(?:what is|what['’]s|explain|define)\s+(?:(?:a|an|the)\s+)?{_CONCEPT}|"
+    rf"what does\s+{_CONCEPT}\s+mean)[.!?\s]*$",
+    re.I,
+)
 
 
 def requires_finance_grounding(message: str, identifiers: dict[str, Any] | None = None) -> bool:
+    # Exact terminology questions contain no requested ERP facts. Keep the grammar
+    # narrow: explanations naming customers, records or amounts still require reads.
+    if _DEFINITION.fullmatch(message.strip()):
+        return False
     if _FINANCE.search(message):
         return True
     if _NON_ERP.fullmatch(message.strip()):

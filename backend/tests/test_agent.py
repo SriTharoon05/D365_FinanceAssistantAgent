@@ -149,13 +149,15 @@ async def test_ambiguous_customer_requires_clarification(chat_setup):
 async def test_missing_azure_key_in_live_mode_saves_user_and_allows_retry(chat_setup):
     service, finance, sessions, conversation_id, owner_id = chat_setup
     service.settings.d365_mock_mode = False
-    events = await turn(chat_setup, "What is the outstanding balance for Asterion?")
+    # Ordinary finance reads no longer depend on Azure tool-selection. An open
+    # conversational question still exercises saved-message / AI outage retries.
+    events = await turn(chat_setup, "What does an AI assistant do?")
     assert any(name == "error" and payload["code"] == "azure_openai_unavailable" for name, payload in events)
     assert not finance.calls
     async with sessions() as session:
         messages = list((await session.scalars(select(Message))).all())
     assert len(messages) == 2
-    assert next(item for item in messages if item.role == "user").content.startswith("What is")
+    assert next(item for item in messages if item.role == "user").content == "What does an AI assistant do?"
     assistant = next(item for item in messages if item.role == "assistant")
     assert assistant.status == "error"
     retried = [
@@ -325,6 +327,8 @@ async def test_live_langgraph_routes_typed_tools_and_stops_at_limit(chat_setup, 
 
     from app.agent import graph
 
+    monkeypatch.setattr("app.services.chat.resolve_read_request", lambda *args: None)
+
     class ToolModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):
             return self
@@ -430,6 +434,8 @@ async def test_connected_model_cannot_answer_finance_without_fresh_tools(chat_se
 
     from app.agent import graph
 
+    monkeypatch.setattr("app.services.chat.resolve_read_request", lambda *args: None)
+
     class UngroundedModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):
             return self
@@ -452,6 +458,8 @@ async def test_live_stream_emits_only_after_fresh_tool_grounding(chat_setup, mon
     from langchain_core.messages import AIMessage
 
     from app.agent import graph
+
+    monkeypatch.setattr("app.services.chat.resolve_read_request", lambda *args: None)
 
     class GroundedModel(FakeMessagesListChatModel):
         def bind_tools(self, tools, **kwargs):

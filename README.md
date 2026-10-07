@@ -9,6 +9,7 @@ flowchart LR
     API --> Agent[Bounded LangGraph assistant]
     Agent --> Azure[Azure OpenAI]
     Agent --> Tools[Typed finance tools]
+    API -->|Supported read requests| Tools
     Tools --> ERP[Standard D365 OData + Entra OAuth]
     API --> Groq[Optional Groq Whisper]
     UI --> Speech[Browser SpeechSynthesis]
@@ -19,6 +20,7 @@ flowchart LR
 - Streaming chat, persistent conversations, finance evidence cards and invoice details.
 - Dynamics 365 connection status, reconnect and metadata-based transaction capability discovery.
 - Outstanding balances grouped by currency, overdue analysis, payment history and draft collection reminders.
+- Direct routing for common finance reads, with fresh ERP lookups for account IDs, customer names and scoped follow-ups.
 - Snapshot charts for invoice amounts, overdue invoices and payments, with source data available alongside the image.
 - Confirmation-gated customer and draft invoice CRUD; unposted customer payment journal preparation; audit history.
 - Synthetic mock mode for development without ERP or AI credentials.
@@ -71,7 +73,7 @@ For unavailable balances, the resolver now supports an existing `CustTransBiEnti
 
 Charts use the verified records returned for that response, with `Decimal` totals kept separate by company, customer and currency. They are saved snapshots of those rows, which may be a bounded subset; they do not reconstruct historical balances or establish complete account history.
 
-Chart images use [QuickChart's free POST endpoint](https://quickchart.io/documentation/usage/post-endpoint/) through the backend. No new credentials are required; the backend needs outbound HTTPS access to `quickchart.io`. **Amounts, currency and generic category labels or payment dates are sent to QuickChart.** Customer names and company/account/invoice/voucher/reference identifiers and credentials are excluded from that request. If image rendering is unavailable, the chart's data remains viewable locally. See [chart details](guide.md#finance-charts).
+Chart images use [QuickChart's free POST endpoint](https://quickchart.io/documentation/usage/post-endpoint/) through the backend. No new credentials are required; the backend needs outbound HTTPS access to `quickchart.io`. **Amounts, currency, invoice/voucher category identifiers and payment dates are sent to QuickChart.** Customer names, company/customer account identifiers, payment references and credentials are excluded from that request. Invoice identifiers appear directly on the chart; the Data tab retains full identifiers and exact amounts. If image rendering is unavailable, the chart's data remains viewable locally. See [chart details](guide.md#finance-charts).
 
 ## Checks
 
